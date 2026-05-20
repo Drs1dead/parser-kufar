@@ -715,9 +715,9 @@ def _main_menu_keyboard(*, is_admin: bool, user: dict | None = None) -> InlineKe
     )
     if user and user.get("role") == "vip":
         mode = user.get("vip_feed_mode") or "normal"
-        t_bm = "🔥 Ниже рынка (бета)"
+        t_bm = "🔥 Ниже рынка"
         if mode == "below_market":
-            t_bm = "🔥 Ниже рынка (бета) ✓"
+            t_bm = "🔥 Ниже рынка ✓"
         t_ex = "🔄 Обмен"
         if mode == "exchange":
             t_ex = "🔄 Обмен ✓"
@@ -806,7 +806,7 @@ def _vip_info_text() -> str:
         f"Подписка: <b>{VIP_PRICE_USD}$</b> на 30 дней.\n"
         "По оплате напишите: @manohio\n"
         "После оплаты админ активирует VIP вручную.\n\n"
-        "С VIP доступны бета-потоки: <b>ниже рынка</b> и <b>только обмен</b> "
+        "С VIP доступны дополнительные потоки: <b>ниже рынка</b> и <b>только обмен</b> "
         "(все смартфоны из каталога, не только выбранные модели) — кнопками в главном меню."
     )
 

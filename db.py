@@ -1,5 +1,7 @@
 import logging
+import shutil
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -32,13 +34,52 @@ def _norm_promo_code(code: str | None) -> str:
     return code.strip().upper()[:64]
 
 
+def _migrate_legacy_db(target: Path) -> None:
+    """Переносит старый bot.db из корня проекта в постоянную папку data (один раз)."""
+    if target.exists():
+        return
+    project_dir = Path(__file__).resolve().parent
+    legacy = project_dir / "bot.db"
+    if not legacy.is_file():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(legacy, target)
+    log.info("[DB] перенесена база %s → %s", legacy, target)
+    for suffix in ("-wal", "-shm"):
+        side = Path(str(legacy) + suffix)
+        if side.is_file():
+            try:
+                shutil.copy2(side, Path(str(target) + suffix))
+            except OSError:
+                log.warning("[DB] не удалось скопировать %s", side, exc_info=True)
+
+
 def _sqlite_path() -> str:
-    """Абсолютный путь к файлу БД: из DB_PATH или bot.db рядом с этим модулем (не от cwd)."""
+    """
+    Абсолютный путь к SQLite (не зависит от cwd).
+
+    Приоритет:
+    1) DB_PATH из .env / панели BotHost
+    2) /app/data/bot.db — персистентное хранилище BotHost (не затирается при git deploy)
+    3) <проект>/data/bot.db локально (с миграцией из старого bot.db в корне)
+    """
     if DB_PATH_OVERRIDE:
         p = Path(DB_PATH_OVERRIDE).expanduser().resolve()
         p.parent.mkdir(parents=True, exist_ok=True)
         return str(p)
-    return str(Path(__file__).resolve().parent / "bot.db")
+
+    bothost_data = Path("/app/data")
+    if bothost_data.is_dir():
+        db_file = bothost_data / "bot.db"
+        _migrate_legacy_db(db_file)
+        bothost_data.mkdir(parents=True, exist_ok=True)
+        return str(db_file)
+
+    data_dir = Path(__file__).resolve().parent / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    db_file = data_dir / "bot.db"
+    _migrate_legacy_db(db_file)
+    return str(db_file)
 
 
 SQLITE_PATH = _sqlite_path()
@@ -59,10 +100,21 @@ def _connect() -> sqlite3.Connection:
 
 
 conn = _connect()
+_db_lock = threading.RLock()
+
+
+def _execute(sql: str, params: tuple | list = ()) -> sqlite3.Cursor:
+    with _db_lock:
+        return conn.execute(sql, params)
+
+
+def _executescript(script: str) -> None:
+    with _db_lock:
+        conn.executescript(script)
 
 
 def _table_columns(name: str) -> set[str]:
-    cur = conn.execute(f"PRAGMA table_info({name})")
+    cur = _execute(f"PRAGMA table_info({name})")
     return {row[1] for row in cur.fetchall()}
 
 
@@ -71,9 +123,9 @@ def init_db() -> None:
     # Старая схема (с прошлых экспериментов) — сносим, чтобы создать заново
     existing = _table_columns("users")
     if existing and "active" not in existing:
-        conn.execute("DROP TABLE users")
+        _execute("DROP TABLE users")
 
-    conn.executescript(
+    _executescript(
         """
         CREATE TABLE IF NOT EXISTS users (
             chat_id    INTEGER PRIMARY KEY,
@@ -133,19 +185,19 @@ def init_db() -> None:
     )
     cols = _table_columns("users")
     if "role" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'regular'")
+        _execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'regular'")
     if "vip_until" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN vip_until INTEGER NOT NULL DEFAULT 0")
+        _execute("ALTER TABLE users ADD COLUMN vip_until INTEGER NOT NULL DEFAULT 0")
     if "vip_feed_mode" not in cols:
-        conn.execute(
+        _execute(
             "ALTER TABLE users ADD COLUMN vip_feed_mode TEXT NOT NULL DEFAULT 'normal'"
         )
     if "username" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN username TEXT NOT NULL DEFAULT ''")
+        _execute("ALTER TABLE users ADD COLUMN username TEXT NOT NULL DEFAULT ''")
     promo_cols = _table_columns("promo_codes")
     if "max_uses" not in promo_cols:
-        conn.execute("ALTER TABLE promo_codes ADD COLUMN max_uses INTEGER NOT NULL DEFAULT 0")
-    conn.execute(
+        _execute("ALTER TABLE promo_codes ADD COLUMN max_uses INTEGER NOT NULL DEFAULT 0")
+    _execute(
         "INSERT OR IGNORE INTO promo_codes (code, vip_days, max_uses, is_active, created_at) VALUES (?, ?, 0, 1, ?)",
         (TRIAL_PROMO_CODE, TRIAL_PROMO_DAYS, int(time.time())),
     )
@@ -154,7 +206,7 @@ def init_db() -> None:
 
 def update_user_username(chat_id: int, username: str | None) -> None:
     """Telegram @username без «@»; пусто — сброс."""
-    conn.execute(
+    _execute(
         "UPDATE users SET username = ? WHERE chat_id = ?",
         (_norm_username(username), chat_id),
     )
@@ -163,10 +215,10 @@ def update_user_username(chat_id: int, username: str | None) -> None:
 def add_user(chat_id: int, *, username: str | None = None) -> bool:
     """Добавить пользователя или реактивировать. True если это новый юзер."""
     u = _norm_username(username)
-    cur = conn.execute("SELECT active FROM users WHERE chat_id = ?", (chat_id,))
+    cur = _execute("SELECT active FROM users WHERE chat_id = ?", (chat_id,))
     row = cur.fetchone()
     if row is None:
-        conn.execute(
+        _execute(
             "INSERT INTO users (chat_id, active, role, vip_until, max_price, keywords, "
             "created_at, vip_feed_mode, username) "
             "VALUES (?, 1, 'regular', 0, ?, ?, ?, 'normal', ?)",
@@ -180,17 +232,17 @@ def add_user(chat_id: int, *, username: str | None = None) -> bool:
         )
         return True
     if row[0] == 0:
-        conn.execute(
+        _execute(
             "UPDATE users SET active = 1, username = ? WHERE chat_id = ?",
             (u, chat_id),
         )
     else:
-        conn.execute("UPDATE users SET username = ? WHERE chat_id = ?", (u, chat_id))
+        _execute("UPDATE users SET username = ? WHERE chat_id = ?", (u, chat_id))
     return False
 
 
 def set_active(chat_id: int, active: bool) -> None:
-    conn.execute(
+    _execute(
         "UPDATE users SET active = ? WHERE chat_id = ?",
         (1 if active else 0, chat_id),
     )
@@ -198,7 +250,7 @@ def set_active(chat_id: int, active: bool) -> None:
 
 def get_user(chat_id: int) -> Optional[dict]:
     _expire_vip(chat_id)
-    cur = conn.execute(
+    cur = _execute(
         "SELECT chat_id, active, role, vip_until, max_price, keywords, sent_count, created_at, "
         "vip_feed_mode, username FROM users WHERE chat_id = ?",
         (chat_id,),
@@ -221,19 +273,19 @@ def get_user(chat_id: int) -> Optional[dict]:
 
 
 def count_users_total() -> int:
-    cur = conn.execute("SELECT COUNT(*) FROM users")
+    cur = _execute("SELECT COUNT(*) FROM users")
     return int(cur.fetchone()[0])
 
 
 def count_users_active() -> int:
-    cur = conn.execute("SELECT COUNT(*) FROM users WHERE active = 1")
+    cur = _execute("SELECT COUNT(*) FROM users WHERE active = 1")
     return int(cur.fetchone()[0])
 
 
 def count_users_vip() -> int:
     _expire_all_vip()
     now = int(time.time())
-    cur = conn.execute(
+    cur = _execute(
         "SELECT COUNT(*) FROM users WHERE role = 'vip' AND vip_until > ?",
         (now,),
     )
@@ -242,7 +294,7 @@ def count_users_vip() -> int:
 
 def list_users_page(*, offset: int, limit: int) -> list[dict]:
     _expire_all_vip()
-    cur = conn.execute(
+    cur = _execute(
         "SELECT chat_id, active, role, vip_until, max_price, keywords, sent_count, created_at, "
         "vip_feed_mode, username FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?",
         (limit, offset),
@@ -267,13 +319,13 @@ def list_users_page(*, offset: int, limit: int) -> list[dict]:
 
 
 def clear_market_prices() -> int:
-    cur = conn.execute("DELETE FROM market_prices")
+    cur = _execute("DELETE FROM market_prices")
     return cur.rowcount if cur.rowcount is not None else 0
 
 
 def get_active_users() -> list[dict]:
     _expire_all_vip()
-    cur = conn.execute(
+    cur = _execute(
         "SELECT chat_id, active, role, vip_until, max_price, keywords, sent_count, created_at, "
         "vip_feed_mode, username FROM users WHERE active = 1"
     )
@@ -295,7 +347,7 @@ def get_active_users() -> list[dict]:
 
 
 def update_max_price(chat_id: int, max_price: int) -> None:
-    conn.execute(
+    _execute(
         "UPDATE users SET max_price = ? WHERE chat_id = ?",
         (max_price, chat_id),
     )
@@ -303,21 +355,21 @@ def update_max_price(chat_id: int, max_price: int) -> None:
 
 def update_keywords(chat_id: int, keywords: list[str]) -> None:
     cleaned = [k.strip().lower() for k in keywords if k.strip()]
-    conn.execute(
+    _execute(
         "UPDATE users SET keywords = ? WHERE chat_id = ?",
         (",".join(cleaned), chat_id),
     )
 
 
 def reset_user_filters(chat_id: int) -> None:
-    conn.execute(
+    _execute(
         "UPDATE users SET max_price = ?, keywords = ? WHERE chat_id = ?",
         (DEFAULT_MAX_PRICE, ",".join(DEFAULT_KEYWORDS), chat_id),
     )
 
 
 def is_seen(chat_id: int, link: str) -> bool:
-    cur = conn.execute(
+    cur = _execute(
         "SELECT 1 FROM seen_ads WHERE chat_id = ? AND link = ?",
         (chat_id, link),
     )
@@ -325,26 +377,26 @@ def is_seen(chat_id: int, link: str) -> bool:
 
 
 def mark_seen(chat_id: int, link: str) -> None:
-    conn.execute(
+    _execute(
         "INSERT OR IGNORE INTO seen_ads (chat_id, link, seen_at) VALUES (?, ?, ?)",
         (chat_id, link, int(time.time())),
     )
 
 
 def count_seen(chat_id: int) -> int:
-    cur = conn.execute("SELECT COUNT(*) FROM seen_ads WHERE chat_id = ?", (chat_id,))
+    cur = _execute("SELECT COUNT(*) FROM seen_ads WHERE chat_id = ?", (chat_id,))
     return int(cur.fetchone()[0])
 
 
 def increment_sent(chat_id: int) -> None:
-    conn.execute(
+    _execute(
         "UPDATE users SET sent_count = sent_count + 1 WHERE chat_id = ?",
         (chat_id,),
     )
 
 
 def save_sent_price(chat_id: int, link: str, device_key: str, price: int) -> None:
-    conn.execute(
+    _execute(
         "INSERT OR IGNORE INTO sent_prices (chat_id, link, device_key, price, sent_at) "
         "VALUES (?, ?, ?, ?, ?)",
         (chat_id, link, device_key, price, int(time.time())),
@@ -352,7 +404,7 @@ def save_sent_price(chat_id: int, link: str, device_key: str, price: int) -> Non
 
 
 def avg_sent_price(chat_id: int, device_key: str) -> int | None:
-    cur = conn.execute(
+    cur = _execute(
         "SELECT AVG(price) FROM sent_prices WHERE chat_id = ? AND device_key = ?",
         (chat_id, device_key),
     )
@@ -364,7 +416,7 @@ def avg_sent_price(chat_id: int, device_key: str) -> int | None:
 
 
 def save_market_price(link: str, device_key: str, price: int) -> None:
-    conn.execute(
+    _execute(
         "INSERT OR IGNORE INTO market_prices (link, device_key, price, sent_at) "
         "VALUES (?, ?, ?, ?)",
         (link, device_key, price, int(time.time())),
@@ -372,7 +424,7 @@ def save_market_price(link: str, device_key: str, price: int) -> None:
 
 
 def avg_market_price(device_key: str) -> int | None:
-    cur = conn.execute(
+    cur = _execute(
         "SELECT AVG(price) FROM market_prices WHERE device_key = ?",
         (device_key,),
     )
@@ -386,7 +438,7 @@ def avg_market_price(device_key: str) -> int | None:
 def update_vip_feed_mode(chat_id: int, mode: str) -> None:
     if mode not in ("normal", "below_market", "exchange"):
         return
-    conn.execute(
+    _execute(
         "UPDATE users SET vip_feed_mode = ? WHERE chat_id = ? AND role = 'vip'",
         (mode, chat_id),
     )
@@ -395,7 +447,7 @@ def update_vip_feed_mode(chat_id: int, mode: str) -> None:
 def checkpoint_wal() -> None:
     """Сброс WAL на диск (безопаснее при копировании bot.db и при остановке процесса)."""
     try:
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        _execute("PRAGMA wal_checkpoint(TRUNCATE)")
     except sqlite3.Error:
         log.warning("PRAGMA wal_checkpoint не удался", exc_info=True)
 
@@ -404,13 +456,14 @@ def close() -> None:
     try:
         checkpoint_wal()
     finally:
-        conn.close()
+        with _db_lock:
+            conn.close()
 
 
 def set_vip(chat_id: int, *, days: int = VIP_SUBSCRIPTION_DAYS) -> None:
     now = int(time.time())
     add_seconds = max(1, days) * 24 * 60 * 60
-    cur = conn.execute(
+    cur = _execute(
         "SELECT role, vip_until FROM users WHERE chat_id = ?", (chat_id,)
     )
     row = cur.fetchone()
@@ -421,7 +474,7 @@ def set_vip(chat_id: int, *, days: int = VIP_SUBSCRIPTION_DAYS) -> None:
         vip_until = max(now, vip_until_raw) + add_seconds
     else:
         vip_until = now + add_seconds
-    conn.execute(
+    _execute(
         "UPDATE users SET role = 'vip', vip_until = ? WHERE chat_id = ?",
         (vip_until, chat_id),
     )
@@ -433,7 +486,7 @@ def redeem_promo_code(chat_id: int, code: str) -> tuple[str, int | None]:
     if not promo:
         return "not_found", None
 
-    cur = conn.execute(
+    cur = _execute(
         "SELECT vip_days, is_active, max_uses FROM promo_codes WHERE code = ?",
         (promo,),
     )
@@ -443,11 +496,11 @@ def redeem_promo_code(chat_id: int, code: str) -> tuple[str, int | None]:
 
     max_uses = int(row[2] or 0)
     if max_uses > 0 and _promo_uses_count(promo) >= max_uses:
-        conn.execute("DELETE FROM promo_codes WHERE code = ?", (promo,))
+        _execute("DELETE FROM promo_codes WHERE code = ?", (promo,))
         return "not_found", None
 
     try:
-        conn.execute(
+        _execute(
             "INSERT INTO promo_activations (chat_id, code, used_at) VALUES (?, ?, ?)",
             (chat_id, promo, int(time.time())),
         )
@@ -456,7 +509,7 @@ def redeem_promo_code(chat_id: int, code: str) -> tuple[str, int | None]:
 
     days = max(1, int(row[0] or 0))
     if max_uses > 0 and _promo_uses_count(promo) >= max_uses:
-        conn.execute("DELETE FROM promo_codes WHERE code = ?", (promo,))
+        _execute("DELETE FROM promo_codes WHERE code = ?", (promo,))
     return "ok", days
 
 
@@ -465,7 +518,7 @@ def create_promo_code(code: str, *, vip_days: int, max_uses: int) -> bool:
     if not promo:
         return False
     try:
-        conn.execute(
+        _execute(
             "INSERT INTO promo_codes (code, vip_days, max_uses, is_active, created_at) "
             "VALUES (?, ?, ?, 1, ?)",
             (promo, max(1, int(vip_days)), max(0, int(max_uses)), int(time.time())),
@@ -477,7 +530,7 @@ def create_promo_code(code: str, *, vip_days: int, max_uses: int) -> bool:
 
 def list_active_promo_codes() -> list[dict]:
     _cleanup_used_up_promo_codes()
-    cur = conn.execute(
+    cur = _execute(
         "SELECT code, vip_days, max_uses, created_at FROM promo_codes WHERE is_active = 1 ORDER BY created_at DESC"
     )
     rows = []
@@ -496,7 +549,7 @@ def list_active_promo_codes() -> list[dict]:
 
 
 def revoke_vip(chat_id: int) -> None:
-    conn.execute(
+    _execute(
         "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
         "max_price = ?, keywords = ? "
         "WHERE chat_id = ?",
@@ -506,7 +559,7 @@ def revoke_vip(chat_id: int) -> None:
 
 def _expire_vip(chat_id: int) -> None:
     now = int(time.time())
-    conn.execute(
+    _execute(
         "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
         "max_price = ?, keywords = ? "
         "WHERE chat_id = ? AND role = 'vip' AND vip_until > 0 AND vip_until < ?",
@@ -516,7 +569,7 @@ def _expire_vip(chat_id: int) -> None:
 
 def _expire_all_vip() -> None:
     now = int(time.time())
-    conn.execute(
+    _execute(
         "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
         "max_price = ?, keywords = ? "
         "WHERE role = 'vip' AND vip_until > 0 AND vip_until < ?",
@@ -525,7 +578,7 @@ def _expire_all_vip() -> None:
 
 
 def _promo_uses_count(code: str) -> int:
-    cur = conn.execute(
+    cur = _execute(
         "SELECT COUNT(*) FROM promo_activations WHERE code = ?",
         (_norm_promo_code(code),),
     )
@@ -533,7 +586,7 @@ def _promo_uses_count(code: str) -> int:
 
 
 def _cleanup_used_up_promo_codes() -> None:
-    conn.execute(
+    _execute(
         """
         DELETE FROM promo_codes
         WHERE max_uses > 0

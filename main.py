@@ -38,8 +38,14 @@ from db import (
     set_active,
 )
 from formatter import format_ad
-from filters import ad_device_key, is_exchange_ad, matches_filters
-from kufar_fetch import fetch_ads
+from filters import (
+    ad_device_key,
+    exchange_reject_reason,
+    filter_reject_reason,
+    log_filter_reject,
+    matches_filters,
+)
+from kufar_fetch import enrich_ad_description, fetch_ads
 
 log = logging.getLogger("kufar_bot")
 
@@ -51,7 +57,9 @@ last_run_at: dict[int, float] = {}
 def _ingest_market_prices_from_ads(ads: list[dict]) -> None:
     """Пополняет market_prices из текущего батча листинга (один ответ API — одна база для средней)."""
     for a in ads:
-        if not matches_filters(a, _VIP_SPECIAL_MAX_PRICE, [], smart_filtering=True):
+        if not matches_filters(
+            a, _VIP_SPECIAL_MAX_PRICE, [], smart_filtering=True, device_filter=False
+        ):
             continue
         dk = ad_device_key(a)
         price = a.get("price")
@@ -61,6 +69,14 @@ def _ingest_market_prices_from_ads(ads: list[dict]) -> None:
         if not isinstance(link, str) or not link.strip():
             continue
         save_market_price(link, dk, price)
+
+
+def _needs_descriptions(users: list[dict]) -> bool:
+    """Описание нужно для VIP-потока «только обмен» (фильтр по тексту объявления)."""
+    return any(
+        u.get("role") == "vip" and (u.get("vip_feed_mode") or "normal") == "exchange"
+        for u in users
+    )
 
 
 async def _send_ad(
@@ -113,7 +129,7 @@ async def _send_ad(
         return False
 
 
-async def _process_user(bot: Bot, user: dict, ads: list[dict]) -> None:
+def _match_ads_for_user(user: dict, ads: list[dict]) -> list[dict]:
     chat_id = user["chat_id"]
     is_vip = user.get("role") == "vip"
     feed_mode = (user.get("vip_feed_mode") or "normal") if is_vip else "normal"
@@ -127,6 +143,7 @@ async def _process_user(bot: Bot, user: dict, ads: list[dict]) -> None:
                 _VIP_SPECIAL_MAX_PRICE,
                 [],
                 smart_filtering=True,
+                device_filter=False,
             )
         ]
         matched = []
@@ -138,29 +155,64 @@ async def _process_user(bot: Bot, user: dict, ads: list[dict]) -> None:
             mavg = avg_market_price(dk)
             if mavg and price < int(mavg * MARKET_DISCOUNT_THRESHOLD):
                 matched.append(a)
-    elif is_vip and feed_mode == "exchange":
-        matched = [
-            a
-            for a in ads
-            if matches_filters(
+        return matched
+
+    if is_vip and feed_mode == "exchange":
+        matched = []
+        for a in ads:
+            if not matches_filters(
                 a,
                 _VIP_SPECIAL_MAX_PRICE,
                 [],
                 smart_filtering=True,
-            )
-            and is_exchange_ad(a)
-        ]
-    else:
-        matched = [
-            a
-            for a in ads
-            if matches_filters(
+                device_filter=False,
+            ):
+                reason = filter_reject_reason(
+                    a,
+                    _VIP_SPECIAL_MAX_PRICE,
+                    [],
+                    smart_filtering=True,
+                    device_filter=False,
+                )
+                if reason:
+                    log_filter_reject(a, reason, chat_id=chat_id, feed_mode=feed_mode)
+                continue
+            ex_reason = exchange_reject_reason(a)
+            if ex_reason:
+                log_filter_reject(a, ex_reason, chat_id=chat_id, feed_mode=feed_mode)
+                continue
+            matched.append(a)
+        return matched
+
+    matched = []
+    for a in ads:
+        if matches_filters(
+            a,
+            user["max_price"],
+            user["keywords"],
+            smart_filtering=True,
+            device_filter=True,
+        ):
+            matched.append(a)
+        else:
+            reason = filter_reject_reason(
                 a,
                 user["max_price"],
                 user["keywords"],
-                smart_filtering=is_vip,
+                smart_filtering=True,
+                device_filter=True,
             )
-        ]
+            if reason:
+                log_filter_reject(a, reason, chat_id=chat_id, feed_mode=feed_mode)
+    return matched
+
+
+async def _process_user(bot: Bot, user: dict, ads: list[dict]) -> None:
+    chat_id = user["chat_id"]
+    is_vip = user.get("role") == "vip"
+    feed_mode = (user.get("vip_feed_mode") or "normal") if is_vip else "normal"
+
+    matched = _match_ads_for_user(user, ads)
     if not matched:
         return
 
@@ -189,6 +241,8 @@ async def _process_user(bot: Bot, user: dict, ads: list[dict]) -> None:
                 below_market = True
             elif market_avg and price and price < int(market_avg * MARKET_DISCOUNT_THRESHOLD):
                 below_market = True
+        if not (ad.get("description") or "").strip():
+            await enrich_ad_description(ad)
         ok = await _send_ad(
             bot,
             chat_id,
@@ -196,8 +250,8 @@ async def _process_user(bot: Bot, user: dict, ads: list[dict]) -> None:
             market_avg_price=market_avg if is_vip else None,
             below_market=below_market,
         )
-        mark_seen(chat_id, ad["link"])
         if ok:
+            mark_seen(chat_id, ad["link"])
             increment_sent(chat_id)
             if (
                 device_key
@@ -206,20 +260,26 @@ async def _process_user(bot: Bot, user: dict, ads: list[dict]) -> None:
             ):
                 save_market_price(ad["link"], device_key, price)
             await asyncio.sleep(0.05)
+        else:
+            log.warning(
+                "[POLLER] не доставлено chat_id=%s link=%s — повторим в следующем цикле",
+                chat_id,
+                ad.get("link"),
+            )
 
 
 async def poller(bot: Bot) -> None:
     """Фоновый цикл: парсит Kufar и рассылает новые объявления подписчикам."""
     while True:
         try:
-            users = get_active_users()
+            users = await asyncio.to_thread(get_active_users)
             if not users:
                 log.info("[POLLER] нет активных подписчиков, жду")
             else:
                 log.info("[POLLER] поиск объявлений для %d юзеров", len(users))
-                ads = await fetch_ads()
+                ads = await fetch_ads(with_description=_needs_descriptions(users))
                 log.info("[POLLER] получено %d объявлений", len(ads))
-                _ingest_market_prices_from_ads(ads)
+                await asyncio.to_thread(_ingest_market_prices_from_ads, ads)
 
                 for user in users:
                     try:
@@ -258,7 +318,11 @@ async def main() -> None:
 
     init_db()
     log.info("[BOT] SQLite synchronous=%s (см. SQLITE_SYNCHRONOUS в .env)", SQLITE_SYNCHRONOUS)
-    log.info("[BOT] файл БД: %s (DB_PATH в .env: %s)", SQLITE_PATH, DB_PATH or "не задан")
+    log.info(
+        "[BOT] файл БД: %s (DB_PATH в .env: %s; на BotHost — /app/data/bot.db)",
+        SQLITE_PATH,
+        DB_PATH or "авто",
+    )
 
     bot = Bot(
         token=TOKEN,

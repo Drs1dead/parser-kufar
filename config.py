@@ -6,8 +6,8 @@ load_dotenv()
 
 TOKEN = os.getenv("TOKEN", "").strip()
 
-# Путь к SQLite. Пусто = файл bot.db в папке проекта (рядом с db.py), не зависит от cwd.
-# На Docker/PaaS без постоянного диска задайте путь на volume, например /data/bot.db
+# Путь к SQLite. Пусто = авто (см. db._sqlite_path): data/bot.db локально, /app/data/bot.db на BotHost.
+# На BotHost в панели можно явно: DB_PATH=/app/data/bot.db
 DB_PATH = os.getenv("DB_PATH", "").strip()
 
 # Ожидание блокировки SQLite, сек. (параметр timeout в sqlite3.connect).
@@ -28,6 +28,11 @@ FIRST_RUN_LIMIT = int(os.getenv("FIRST_RUN_LIMIT", "3"))
 VIP_SUBSCRIPTION_DAYS = int(os.getenv("VIP_SUBSCRIPTION_DAYS", "30"))
 VIP_PRICE_USD = int(os.getenv("VIP_PRICE_USD", "2"))
 MARKET_DISCOUNT_THRESHOLD = float(os.getenv("MARKET_DISCOUNT_THRESHOLD", "0.85"))
+FILTER_DEBUG_LOG = os.getenv("FILTER_DEBUG_LOG", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 ADMIN_IDS = {
     int(x.strip())
     for x in os.getenv("ADMIN_IDS", "").split(",")
@@ -159,7 +164,46 @@ DEFAULT_EXCLUDE_TERMS: tuple[str, ...] = (
     "шлейф",
     "шлейфы",
     "экран",
-    "микрофон"
+    "микрофон",
+)
+
+# Запчасти / платы / разбор: в названии + summary + описании (не целый телефон).
+PARTS_EXCLUDE_TERMS: tuple[str, ...] = (
+    "запчасти",
+    "запчасть",
+    "запчастей",
+    "платы",
+    "плата",
+    "плату",
+    "плат ",
+    "платам",
+    "материнск",
+    "motherboard",
+    "logic board",
+    "mainboard",
+    "заблокирован",
+    "заблокир",
+    "icloud lock",
+    "на icloud",
+    "плата на icloud",
+    "донор",
+    "донорск",
+    "donor parts",
+    "разбор",
+    "разборка",
+    "комплектующ",
+    "б/у плата",
+    "только плата",
+    "продаю плату",
+    "продам плату",
+    "корпуса",
+    "корпусов",
+    "без экрана",
+    "без дисплея",
+    "отдельно экран",
+    "отдельно дисплей",
+    "на запчасти",
+    "для запчаст",
 )
 
 # В названии или кратких параметрах (summary) должно быть явно про телефон.
@@ -187,6 +231,12 @@ NOT_SALE_TERMS: tuple[str, ...] = (
     "купим",
     "покупаем",
     "срочный выкуп",
+    "без торга",
+    "без скидок",
+    "без скидки",
+    "ассортимент обновляется",
+    "подписавшись на наш профиль",
+    "работаем без скидок",
 )
 
 KUFAR_QUERY = os.getenv(

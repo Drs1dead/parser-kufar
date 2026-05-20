@@ -199,6 +199,34 @@ async def _enrich_description(
         ad["description"] = await _fetch_description(session, ad["link"])
 
 
+async def enrich_ad_description(ad: dict) -> None:
+    """Подгружает описание для одного объявления (если ещё не загружено)."""
+    if (ad.get("description") or "").strip():
+        return
+    link = ad.get("link")
+    if not isinstance(link, str) or not link.strip():
+        return
+    connector = aiohttp.TCPConnector(limit=2)
+    async with aiohttp.ClientSession(
+        headers=DEFAULT_HEADERS, connector=connector
+    ) as session:
+        sem = asyncio.Semaphore(1)
+        await _enrich_description(session, ad, sem)
+
+
+async def enrich_ads_descriptions(ads: list[dict], *, concurrency: int = 5) -> None:
+    """Параллельно подгружает описания для списка объявлений."""
+    need = [a for a in ads if not (a.get("description") or "").strip() and a.get("link")]
+    if not need:
+        return
+    connector = aiohttp.TCPConnector(limit=8)
+    async with aiohttp.ClientSession(
+        headers=DEFAULT_HEADERS, connector=connector
+    ) as session:
+        sem = asyncio.Semaphore(max(1, concurrency))
+        await asyncio.gather(*(_enrich_description(session, ad, sem) for ad in need))
+
+
 async def fetch_ads(*, with_description: bool = True) -> list[dict]:
     """
     Объявления с листинга. Поля: ad_id, title, price, price_usd, location,
