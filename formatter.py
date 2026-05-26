@@ -1,7 +1,7 @@
 from html import escape
 from datetime import datetime, timezone
 
-from config import VIP_PRICE_USD
+from config import format_memory_volume, format_price
 
 
 def _esc(value) -> str:
@@ -19,26 +19,26 @@ def format_ad(
     price = ad.get("price")
     price_usd = ad.get("price_usd")
     if price is not None:
-        price_str = f"{price:,}".replace(",", " ") + " р."
+        price_str = format_price(price)
         if price_usd:
-            price_str += f" (≈ {price_usd}$)"
+            price_str += f" · ≈ {price_usd}$"
     else:
-        price_str = "цена не указана"
+        price_str = "не указана"
 
     location = _esc(ad.get("location") or "")
     description = _esc(ad.get("description") or "")
     link = ad.get("link") or ""
 
-    parts = [
-        f"📱 <b>{title}</b>",
-        f"💰 <b>{_esc(price_str)}</b>",
-    ]
+    parts: list[str] = []
     if below_market:
-        parts.insert(0, "🔥 <b>НИЖЕ РЫНОЧНОЙ ЦЕНЫ</b>")
+        parts.append("🔥 <b>Ниже рыночной цены</b>")
+        parts.append("")
+    parts.append(f"📱 <b>{title}</b>")
+    parts.append(f"💰 <b>{_esc(price_str)}</b>")
     if market_avg_price is not None:
-        parts.append(f"📊 Средняя рыночная цена: <b>{market_avg_price} р.</b>")
+        parts.append(f"📊 Средняя на Kufar · <b>{format_price(market_avg_price)}</b>")
     if location:
-        parts.append(f"📍 <i>{location}</i>")
+        parts.append(f"📍 {_esc(location)}")
     if description:
         parts.append("")
         parts.append(description)
@@ -49,68 +49,59 @@ def format_ad(
 
 
 def format_status(user: dict) -> str:
-    active = "включена ✅" if user.get("active") else "выключена ❌"
+    active = "🔔 включены" if user.get("active") else "🔕 на паузе"
     keywords = user.get("keywords") or []
     kw = ", ".join(keywords) if keywords else "—"
+    mem_vols = user.get("memory_volumes") or ["64"]
+    mem = ", ".join(format_memory_volume(v) for v in mem_vols)
     max_price = user.get("max_price") or 0
     sent = user.get("sent_count", 0)
-    role = "VIP ⭐" if user.get("role") == "vip" else "Обычный"
+    role = "VIP ⭐" if user.get("role") == "vip" else "обычный"
     vip_until = int(user.get("vip_until") or 0)
     vip_until_text = "—"
     if vip_until > 0:
         dt = datetime.fromtimestamp(vip_until, tz=timezone.utc).astimezone()
-        vip_until_text = dt.strftime("%d.%m.%Y %H:%M")
+        vip_until_text = dt.strftime("%d.%m.%Y в %H:%M")
 
     vip_feed = ""
     if user.get("role") == "vip":
         mode = user.get("vip_feed_mode") or "normal"
         if mode == "below_market":
-            vip_feed = "\n<b>VIP-поток:</b> только ниже рынка (все смартфоны из каталога)"
+            vip_feed = "\n🔥 <b>Поток:</b> ниже рынка"
         elif mode == "exchange":
-            vip_feed = "\n<b>VIP-поток:</b> только обмен (все смартфоны из каталога)"
+            vip_feed = "\n🔄 <b>Поток:</b> только обмен"
 
     paused = ""
     if not user.get("active"):
         paused = (
-            "\n\n⚠️ <b>Объявления сейчас не приходят</b> (рассылка выключена).\n"
-            "В главном меню нажми <b>«Включить рассылку»</b> или отправь <code>/start</code>."
+            "\n\n💤 <b>Уведомления на паузе</b>\n"
+            "Включите · <b>«Включить уведомления»</b> или <code>/start</code>"
         )
 
     cid = user.get("chat_id")
     un = (user.get("username") or "").strip()
     if un:
         uq = _esc(un)
-        username_line = f'<b>Username:</b> <a href="https://t.me/{uq}">@{uq}</a>\n'
+        username_line = f"🆔 <b>Telegram:</b> <a href=\"https://t.me/{uq}\">@{uq}</a>\n"
     elif cid is not None:
         cid_i = int(cid)
         username_line = (
-            f'<b>Username:</b> нет публичного @ · '
+            f"🆔 <b>Telegram:</b> без @ · "
             f'<a href="tg://user?id={cid_i}">открыть профиль</a>\n'
         )
     else:
-        username_line = "<b>Username:</b> не задан\n"
+        username_line = "🆔 <b>Telegram:</b> —\n"
 
     return (
-        f"<b>Статус подписки:</b> {active}\n"
+        f"📋 <b>Карточка пользователя</b>\n\n"
         f"{username_line}"
-        f"<b>Тип пользователя:</b> {role}\n"
-        f"<b>VIP до:</b> {vip_until_text}\n"
-        f"<b>Макс. цена:</b> {max_price} р.\n"
-        f"<b>Ключевики:</b> {_esc(kw)}\n"
-        f"<b>Прислано объявлений:</b> {sent}"
+        f"👤 <b>Тип:</b> {role}\n"
+        f"⭐ <b>VIP до:</b> {vip_until_text}\n"
+        f"📬 <b>Рассылка:</b> {active}\n"
+        f"💰 <b>Цена до:</b> {format_price(max_price)}\n"
+        f"💾 <b>Память:</b> {_esc(mem)}\n"
+        f"📱 <b>Модели:</b> {_esc(kw)}\n"
+        f"📨 <b>Отправлено объявлений:</b> {sent}"
         f"{vip_feed}"
         f"{paused}"
     )
-
-
-HELP_TEXT = (
-    "<b>Kufar Support Bot</b>\n\n"
-    "Присылаю подходящие объявления с Kufar.\n\n"
-    "<b>Кратко</b>\n"
-    "• <code>/start</code> — меню\n"
-    "• <b>Товары</b> и макс. цена — подбор объявлений (фильтры)\n"
-    "• VIP — расширение и потоки (см. раздел VIP)\n"
-    "• Отписка — в меню; вернуть рассылку — <b>«Включить рассылку»</b> или снова <code>/start</code>\n\n"
-    f"VIP: <b>{VIP_PRICE_USD}$</b> / 30 дней (инструкция в разделе «VIP»)\n."
-    f"ℹ️ Подробнее о нашем проекте в канале <a href='https://t.me/kufarsup'>@kufarsup</a>."
-)

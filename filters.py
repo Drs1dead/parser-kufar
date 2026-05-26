@@ -3,12 +3,17 @@ import logging
 import re
 
 from config import (
+    ACCESSORY_HEADLINE_STEMS,
     DEVICE_CATALOG,
     DEFAULT_EXCLUDE_TERMS,
+    DEFAULT_MEMORY_VOLUMES,
     FILTER_DEBUG_LOG,
+    MEMORY_TIER_512_PLUS_GB,
+    MEMORY_VOLUME_OPTIONS,
     NOT_SALE_TERMS,
     PARTS_EXCLUDE_TERMS,
     PHONE_REQUIRED_TERMS,
+    WHOLE_PHONE_EXCLUDE_HEADLINE,
 )
 
 log = logging.getLogger(__name__)
@@ -89,6 +94,8 @@ REJECT_DEVICE_NOT_SELECTED = "device_not_in_user_keywords"
 REJECT_EXCHANGE_REFUSAL = "exchange_refusal"
 REJECT_EXCHANGE_NEGATIVE = "exchange_negative"
 REJECT_EXCHANGE_NO_HINT = "exchange_no_positive_hint"
+REJECT_NOT_WHOLE_PHONE = "not_whole_phone"
+REJECT_MEMORY_NOT_SELECTED = "memory_not_selected"
 
 
 def normalize(text: str) -> str:
@@ -107,6 +114,46 @@ def ad_full_text(ad: dict) -> str:
     summary = normalize(ad.get("summary") or "")
     description = normalize(ad.get("description") or "")
     return f"{title} {summary} {description}".strip()
+
+
+def ad_headline(ad: dict) -> str:
+    title = normalize(ad.get("title") or "")
+    summary = normalize(ad.get("summary") or "")
+    return f"{title} {summary}".strip()
+
+
+def ad_matching_text(ad: dict) -> str:
+    """Текст для поиска модели: кириллица айфон → iphone, поле phone_model из Kufar."""
+    text = ad_full_text(ad)
+    text = re.sub(r"\bайфон\b", "iphone", text)
+    phone_model = normalize(ad.get("phone_model") or "")
+    if phone_model:
+        text = f"{text} {phone_model}"
+    return text.strip()
+
+
+def _contains_stem(text: str, stem: str) -> bool:
+    stem = normalize(stem).strip()
+    if not stem or not text:
+        return False
+    return stem in text
+
+
+def is_whole_phone_listing(ad: dict) -> bool:
+    """False — аксессуар, запчасть, коробка, клон и т.п."""
+    headline = ad_headline(ad)
+    if not headline:
+        return False
+    if any(_contains_stem(headline, stem) for stem in ACCESSORY_HEADLINE_STEMS):
+        return False
+    if any(_contains_phrase(headline, term) for term in WHOLE_PHONE_EXCLUDE_HEADLINE):
+        return False
+    full_text = f"{headline} {normalize(ad.get('description') or '')}".strip()
+    if any(_contains_phrase(full_text, t) for t in PARTS_EXCLUDE_TERMS):
+        return False
+    if any(_contains_phrase(headline, t) for t in DEFAULT_EXCLUDE_TERMS):
+        return False
+    return True
 
 
 def _contains_phrase(text: str, phrase: str) -> bool:
@@ -175,13 +222,7 @@ def _contains_device_term(text: str, term: str) -> bool:
     return re.search(pattern, text) is not None
 
 
-def ad_device_key(ad: dict) -> str | None:
-    """
-    Нормализованный ключ устройства из каталога.
-    Важно: ищем самое длинное совпадение, чтобы 'iphone 12 pro max'
-    не превращался в 'iphone 12'.
-    """
-    full_text = ad_full_text(ad)
+def _device_key_from_text(full_text: str) -> str | None:
     matched: list[str] = []
     for device in DEVICE_CATALOG:
         key = re.sub(r"\s+", " ", normalize(device).strip())
@@ -193,6 +234,59 @@ def ad_device_key(ad: dict) -> str | None:
         return None
     matched.sort(key=len, reverse=True)
     return matched[0]
+
+
+def ad_device_key(ad: dict) -> str | None:
+    """
+    Нормализованный ключ устройства из каталога.
+    Важно: ищем самое длинное совпадение, чтобы 'iphone 12 pro max'
+    не превращался в 'iphone 12'.
+    """
+    return _device_key_from_text(ad_matching_text(ad))
+
+
+def parse_memory_gb_text(text: str) -> int | None:
+    """Извлекает объём памяти в GB из строки Kufar (128 Гб, 256GB, 1 ТБ)."""
+    t = normalize(text or "").replace(",", " ")
+    if not t:
+        return None
+    if re.search(r"\b1\s*(?:тб|tb)\b", t):
+        return 1024
+    for gb in (1024, 512, 256, 128, 64):
+        if re.search(rf"(?<![0-9]){gb}\s*(?:gb|гб|гиг)\b", t):
+            return gb
+        if re.search(rf"(?<![0-9]){gb}(?![0-9])", t):
+            return gb
+    return None
+
+
+def ad_memory_gb(ad: dict) -> int | None:
+    cached = ad.get("memory_gb")
+    if isinstance(cached, int) and cached > 0:
+        return cached
+    for field in ("phone_memory", "summary", "title", "description"):
+        gb = parse_memory_gb_text(str(ad.get(field) or ""))
+        if gb:
+            return gb
+    return parse_memory_gb_text(ad_full_text(ad))
+
+
+def _normalize_memory_selection(volumes: list[str] | None) -> set[str]:
+    if volumes is None:
+        volumes = list(DEFAULT_MEMORY_VOLUMES)
+    allowed = set(MEMORY_VOLUME_OPTIONS)
+    return {str(v).strip() for v in volumes if str(v).strip() in allowed}
+
+
+def memory_matches_ad(ad: dict, selected: set[str]) -> bool:
+    if not selected:
+        return False
+    gb = ad_memory_gb(ad)
+    if gb is None:
+        return True
+    if "512+" in selected and gb >= MEMORY_TIER_512_PLUS_GB:
+        return True
+    return str(gb) in selected
 
 
 def _keyword_matches_selection(ad_key: str, selected_keys: set[str]) -> bool:
@@ -207,8 +301,10 @@ def filter_reject_reason(
     max_price: int,
     keywords: list[str] | None,
     *,
+    memory_volumes: list[str] | None = None,
     smart_filtering: bool,
     device_filter: bool = True,
+    memory_filter: bool = True,
 ) -> str | None:
     """
     None — объявление проходит фильтры.
@@ -230,14 +326,12 @@ def filter_reject_reason(
     full_text = f"{headline} {description}".strip()
 
     if smart_filtering:
+        if not is_whole_phone_listing(ad):
+            return REJECT_NOT_WHOLE_PHONE
         if not any(_contains_phrase(headline, t) for t in PHONE_REQUIRED_TERMS):
             return REJECT_NOT_PHONE
         if any(_contains_not_sale_term(headline, t) for t in NOT_SALE_TERMS):
             return REJECT_NOT_SALE
-        if any(_contains_phrase(full_text, t) for t in PARTS_EXCLUDE_TERMS):
-            return REJECT_EXCLUDE_PARTS
-        if any(_contains_phrase(title, t) for t in DEFAULT_EXCLUDE_TERMS):
-            return REJECT_EXCLUDE_TITLE
         if is_new_phone_ad(ad):
             return REJECT_NEW_PHONE
 
@@ -256,6 +350,13 @@ def filter_reject_reason(
         if not _keyword_matches_selection(ad_key, selected_keys):
             return REJECT_DEVICE_NOT_SELECTED
 
+    if memory_filter and device_filter:
+        selected_mem = _normalize_memory_selection(memory_volumes)
+        if not selected_mem:
+            return REJECT_MEMORY_NOT_SELECTED
+        if not memory_matches_ad(ad, selected_mem):
+            return REJECT_MEMORY_NOT_SELECTED
+
     return None
 
 
@@ -264,8 +365,10 @@ def matches_filters(
     max_price: int,
     keywords: list[str] | None,
     *,
+    memory_volumes: list[str] | None = None,
     smart_filtering: bool,
     device_filter: bool = True,
+    memory_filter: bool = True,
 ) -> bool:
     """
     Цена — по объявлению целиком.
@@ -278,8 +381,10 @@ def matches_filters(
             ad,
             max_price,
             keywords,
+            memory_volumes=memory_volumes,
             smart_filtering=smart_filtering,
             device_filter=device_filter,
+            memory_filter=memory_filter,
         )
         is None
     )
@@ -300,7 +405,7 @@ def log_filter_reject(
     if feed_mode:
         extra += f" mode={feed_mode}"
     if FILTER_DEBUG_LOG:
-        log.info("[FILTER] reject %s link=%s title=%r%s", reason, link, title, extra)
+        log.debug("filter reject %s link=%s title=%r%s", reason, link, title, extra)
 
 
 def is_exchange_ad(ad: dict) -> bool:

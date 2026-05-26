@@ -1,6 +1,8 @@
 import logging
+import secrets
 import shutil
 import sqlite3
+import string
 import threading
 import time
 from pathlib import Path
@@ -10,6 +12,9 @@ from config import (
     DB_PATH as DB_PATH_OVERRIDE,
     DEFAULT_KEYWORDS,
     DEFAULT_MAX_PRICE,
+    DEFAULT_MEMORY_VOLUMES,
+    MEMORY_VOLUME_OPTIONS,
+    REFERRAL_VIP_DAYS_PER_FRIEND,
     SQLITE_BUSY_TIMEOUT,
     SQLITE_SYNCHRONOUS,
     VIP_SUBSCRIPTION_DAYS,
@@ -32,6 +37,62 @@ def _norm_promo_code(code: str | None) -> str:
     if not code:
         return ""
     return code.strip().upper()[:64]
+
+
+def _norm_memory_volumes(volumes: list[str] | None) -> list[str]:
+    allowed = set(MEMORY_VOLUME_OPTIONS)
+    cleaned: list[str] = []
+    for v in volumes or []:
+        s = str(v).strip()
+        if s in allowed and s not in cleaned:
+            cleaned.append(s)
+    if not cleaned:
+        return list(DEFAULT_MEMORY_VOLUMES)
+    return cleaned
+
+
+def _memory_csv(volumes: list[str]) -> str:
+    return ",".join(_norm_memory_volumes(volumes))
+
+
+def _parse_memory_csv(raw: str | None) -> list[str]:
+    if not raw:
+        return list(DEFAULT_MEMORY_VOLUMES)
+    return _norm_memory_volumes([p.strip() for p in raw.split(",") if p.strip()])
+
+
+def _generate_referral_code() -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    for _ in range(32):
+        code = "".join(secrets.choice(alphabet) for _ in range(8))
+        cur = _execute("SELECT 1 FROM users WHERE referral_code = ?", (code,))
+        if cur.fetchone() is None:
+            return code
+    return "".join(secrets.choice(alphabet) for _ in range(12))
+
+
+_USER_SELECT = (
+    "chat_id, active, role, vip_until, max_price, keywords, sent_count, created_at, "
+    "vip_feed_mode, username, memory_volumes, referral_code, referred_by"
+)
+
+
+def _row_to_user(row: tuple) -> dict:
+    return {
+        "chat_id": row[0],
+        "active": bool(row[1]),
+        "role": row[2],
+        "vip_until": int(row[3] or 0),
+        "max_price": row[4],
+        "keywords": [k.strip() for k in row[5].split(",") if k.strip()],
+        "sent_count": row[6],
+        "created_at": row[7],
+        "vip_feed_mode": row[8] or "normal",
+        "username": (row[9] or "").strip() if len(row) > 9 else "",
+        "memory_volumes": _parse_memory_csv(row[10] if len(row) > 10 else None),
+        "referral_code": (row[11] or "").strip() if len(row) > 11 else "",
+        "referred_by": int(row[12]) if len(row) > 12 and row[12] is not None else None,
+    }
 
 
 def _migrate_legacy_db(target: Path) -> None:
@@ -119,7 +180,7 @@ def _table_columns(name: str) -> set[str]:
 
 
 def init_db() -> None:
-    log.info("SQLite database file: %s", SQLITE_PATH)
+    log.debug("sqlite path=%s", SQLITE_PATH)
     # Старая схема (с прошлых экспериментов) — сносим, чтобы создать заново
     existing = _table_columns("users")
     if existing and "active" not in existing:
@@ -194,6 +255,26 @@ def init_db() -> None:
         )
     if "username" not in cols:
         _execute("ALTER TABLE users ADD COLUMN username TEXT NOT NULL DEFAULT ''")
+    cols = _table_columns("users")
+    if "memory_volumes" not in cols:
+        _execute(
+            "ALTER TABLE users ADD COLUMN memory_volumes TEXT NOT NULL DEFAULT '64'"
+        )
+    if "referral_code" not in cols:
+        _execute("ALTER TABLE users ADD COLUMN referral_code TEXT NOT NULL DEFAULT ''")
+    if "referred_by" not in cols:
+        _execute("ALTER TABLE users ADD COLUMN referred_by INTEGER")
+    _executescript(
+        """
+        CREATE TABLE IF NOT EXISTS referrals (
+            referred_chat_id  INTEGER PRIMARY KEY,
+            referrer_chat_id  INTEGER NOT NULL,
+            created_at        INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_chat_id);
+        """
+    )
+    _backfill_referral_codes()
     promo_cols = _table_columns("promo_codes")
     if "max_uses" not in promo_cols:
         _execute("ALTER TABLE promo_codes ADD COLUMN max_uses INTEGER NOT NULL DEFAULT 0")
@@ -202,6 +283,17 @@ def init_db() -> None:
         (TRIAL_PROMO_CODE, TRIAL_PROMO_DAYS, int(time.time())),
     )
     _cleanup_used_up_promo_codes()
+
+
+def _backfill_referral_codes() -> None:
+    cur = _execute(
+        "SELECT chat_id FROM users WHERE referral_code IS NULL OR referral_code = ''"
+    )
+    for (chat_id,) in cur.fetchall():
+        _execute(
+            "UPDATE users SET referral_code = ? WHERE chat_id = ?",
+            (_generate_referral_code(), chat_id),
+        )
 
 
 def update_user_username(chat_id: int, username: str | None) -> None:
@@ -218,16 +310,19 @@ def add_user(chat_id: int, *, username: str | None = None) -> bool:
     cur = _execute("SELECT active FROM users WHERE chat_id = ?", (chat_id,))
     row = cur.fetchone()
     if row is None:
+        ref_code = _generate_referral_code()
         _execute(
             "INSERT INTO users (chat_id, active, role, vip_until, max_price, keywords, "
-            "created_at, vip_feed_mode, username) "
-            "VALUES (?, 1, 'regular', 0, ?, ?, ?, 'normal', ?)",
+            "created_at, vip_feed_mode, username, memory_volumes, referral_code) "
+            "VALUES (?, 1, 'regular', 0, ?, ?, ?, 'normal', ?, ?, ?)",
             (
                 chat_id,
                 DEFAULT_MAX_PRICE,
                 ",".join(DEFAULT_KEYWORDS),
                 int(time.time()),
                 u,
+                _memory_csv(list(DEFAULT_MEMORY_VOLUMES)),
+                ref_code,
             ),
         )
         return True
@@ -251,25 +346,21 @@ def set_active(chat_id: int, active: bool) -> None:
 def get_user(chat_id: int) -> Optional[dict]:
     _expire_vip(chat_id)
     cur = _execute(
-        "SELECT chat_id, active, role, vip_until, max_price, keywords, sent_count, created_at, "
-        "vip_feed_mode, username FROM users WHERE chat_id = ?",
+        f"SELECT {_USER_SELECT} FROM users WHERE chat_id = ?",
         (chat_id,),
     )
     row = cur.fetchone()
     if row is None:
         return None
-    return {
-        "chat_id": row[0],
-        "active": bool(row[1]),
-        "role": row[2],
-        "vip_until": int(row[3] or 0),
-        "max_price": row[4],
-        "keywords": [k.strip() for k in row[5].split(",") if k.strip()],
-        "sent_count": row[6],
-        "created_at": row[7],
-        "vip_feed_mode": row[8] or "normal",
-        "username": (row[9] or "").strip() if len(row) > 9 else "",
-    }
+    user = _row_to_user(row)
+    if user.get("role") != "vip" and len(user.get("memory_volumes") or []) > 1:
+        norm = list(DEFAULT_MEMORY_VOLUMES)
+        _execute(
+            "UPDATE users SET memory_volumes = ? WHERE chat_id = ?",
+            (_memory_csv(norm), chat_id),
+        )
+        user["memory_volumes"] = norm
+    return user
 
 
 def count_users_total() -> int:
@@ -295,27 +386,10 @@ def count_users_vip() -> int:
 def list_users_page(*, offset: int, limit: int) -> list[dict]:
     _expire_all_vip()
     cur = _execute(
-        "SELECT chat_id, active, role, vip_until, max_price, keywords, sent_count, created_at, "
-        "vip_feed_mode, username FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        f"SELECT {_USER_SELECT} FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?",
         (limit, offset),
     )
-    rows = []
-    for r in cur.fetchall():
-        rows.append(
-            {
-                "chat_id": r[0],
-                "active": bool(r[1]),
-                "role": r[2],
-                "vip_until": int(r[3] or 0),
-                "max_price": r[4],
-                "keywords": [k.strip() for k in r[5].split(",") if k.strip()],
-                "sent_count": r[6],
-                "created_at": r[7],
-                "vip_feed_mode": r[8] or "normal",
-                "username": (r[9] or "").strip() if len(r) > 9 else "",
-            }
-        )
-    return rows
+    return [_row_to_user(r) for r in cur.fetchall()]
 
 
 def clear_market_prices() -> int:
@@ -325,25 +399,8 @@ def clear_market_prices() -> int:
 
 def get_active_users() -> list[dict]:
     _expire_all_vip()
-    cur = _execute(
-        "SELECT chat_id, active, role, vip_until, max_price, keywords, sent_count, created_at, "
-        "vip_feed_mode, username FROM users WHERE active = 1"
-    )
-    return [
-        {
-            "chat_id": r[0],
-            "active": bool(r[1]),
-            "role": r[2],
-            "vip_until": int(r[3] or 0),
-            "max_price": r[4],
-            "keywords": [k.strip() for k in r[5].split(",") if k.strip()],
-            "sent_count": r[6],
-            "created_at": r[7],
-            "vip_feed_mode": r[8] or "normal",
-            "username": (r[9] or "").strip() if len(r) > 9 else "",
-        }
-        for r in cur.fetchall()
-    ]
+    cur = _execute(f"SELECT {_USER_SELECT} FROM users WHERE active = 1")
+    return [_row_to_user(r) for r in cur.fetchall()]
 
 
 def update_max_price(chat_id: int, max_price: int) -> None:
@@ -361,10 +418,100 @@ def update_keywords(chat_id: int, keywords: list[str]) -> None:
     )
 
 
+def update_memory_volumes(chat_id: int, volumes: list[str]) -> None:
+    _execute(
+        "UPDATE users SET memory_volumes = ? WHERE chat_id = ?",
+        (_memory_csv(volumes), chat_id),
+    )
+
+
+def ensure_referral_code(chat_id: int) -> str:
+    user = get_user(chat_id)
+    if user is None:
+        return ""
+    code = (user.get("referral_code") or "").strip()
+    if code:
+        return code
+    code = _generate_referral_code()
+    _execute(
+        "UPDATE users SET referral_code = ? WHERE chat_id = ?",
+        (code, chat_id),
+    )
+    return code
+
+
+def get_user_by_referral_code(code: str) -> Optional[dict]:
+    ref = (code or "").strip().upper()
+    if not ref:
+        return None
+    cur = _execute(
+        f"SELECT {_USER_SELECT} FROM users WHERE referral_code = ?",
+        (ref,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    return _row_to_user(row)
+
+
+def count_referrals(referrer_chat_id: int) -> int:
+    cur = _execute(
+        "SELECT COUNT(*) FROM referrals WHERE referrer_chat_id = ?",
+        (referrer_chat_id,),
+    )
+    return int(cur.fetchone()[0])
+
+
+def grant_vip_days(chat_id: int, days: int) -> None:
+    set_vip(chat_id, days=max(1, int(days)))
+
+
+def process_referral_signup(new_chat_id: int, ref_code: str) -> bool:
+    """Начисляет VIP-дни пригласившему за нового друга. True если бонус выдан."""
+    referrer = get_user_by_referral_code(ref_code)
+    if referrer is None:
+        return False
+    referrer_id = int(referrer["chat_id"])
+    if referrer_id == new_chat_id:
+        return False
+    cur = _execute(
+        "SELECT 1 FROM referrals WHERE referred_chat_id = ?",
+        (new_chat_id,),
+    )
+    if cur.fetchone() is not None:
+        return False
+    now = int(time.time())
+    try:
+        _execute(
+            "INSERT INTO referrals (referred_chat_id, referrer_chat_id, created_at) "
+            "VALUES (?, ?, ?)",
+            (new_chat_id, referrer_id, now),
+        )
+    except sqlite3.IntegrityError:
+        return False
+    _execute(
+        "UPDATE users SET referred_by = ? WHERE chat_id = ? AND referred_by IS NULL",
+        (referrer_id, new_chat_id),
+    )
+    grant_vip_days(referrer_id, REFERRAL_VIP_DAYS_PER_FRIEND)
+    log.info(
+        "referral bonus referrer=%s new_user=%s days=%s",
+        referrer_id,
+        new_chat_id,
+        REFERRAL_VIP_DAYS_PER_FRIEND,
+    )
+    return True
+
+
 def reset_user_filters(chat_id: int) -> None:
     _execute(
-        "UPDATE users SET max_price = ?, keywords = ? WHERE chat_id = ?",
-        (DEFAULT_MAX_PRICE, ",".join(DEFAULT_KEYWORDS), chat_id),
+        "UPDATE users SET max_price = ?, keywords = ?, memory_volumes = ? WHERE chat_id = ?",
+        (
+            DEFAULT_MAX_PRICE,
+            ",".join(DEFAULT_KEYWORDS),
+            _memory_csv(list(DEFAULT_MEMORY_VOLUMES)),
+            chat_id,
+        ),
     )
 
 
@@ -449,7 +596,7 @@ def checkpoint_wal() -> None:
     try:
         _execute("PRAGMA wal_checkpoint(TRUNCATE)")
     except sqlite3.Error:
-        log.warning("PRAGMA wal_checkpoint не удался", exc_info=True)
+        log.debug("wal_checkpoint skipped", exc_info=True)
 
 
 def close() -> None:
@@ -461,6 +608,7 @@ def close() -> None:
 
 
 def set_vip(chat_id: int, *, days: int = VIP_SUBSCRIPTION_DAYS) -> None:
+    ensure_referral_code(chat_id)
     now = int(time.time())
     add_seconds = max(1, days) * 24 * 60 * 60
     cur = _execute(
@@ -528,6 +676,45 @@ def create_promo_code(code: str, *, vip_days: int, max_uses: int) -> bool:
     return True
 
 
+def find_users_by_username(username: str, *, limit: int = 10) -> list[dict]:
+    un = _norm_username(username)
+    if not un:
+        return []
+    cur = _execute(
+        f"SELECT {_USER_SELECT} FROM users WHERE LOWER(username) = LOWER(?) "
+        "ORDER BY created_at DESC LIMIT ?",
+        (un, max(1, int(limit))),
+    )
+    return [_row_to_user(row) for row in cur.fetchall()]
+
+
+def delete_user_completely(chat_id: int) -> bool:
+    cur = _execute("SELECT 1 FROM users WHERE chat_id = ?", (chat_id,))
+    if cur.fetchone() is None:
+        return False
+    _execute("DELETE FROM seen_ads WHERE chat_id = ?", (chat_id,))
+    _execute("DELETE FROM sent_prices WHERE chat_id = ?", (chat_id,))
+    _execute("DELETE FROM promo_activations WHERE chat_id = ?", (chat_id,))
+    _execute(
+        "DELETE FROM referrals WHERE referred_chat_id = ? OR referrer_chat_id = ?",
+        (chat_id, chat_id),
+    )
+    _execute("DELETE FROM users WHERE chat_id = ?", (chat_id,))
+    return True
+
+
+def delete_promo_code(code: str) -> bool:
+    promo = _norm_promo_code(code)
+    if not promo:
+        return False
+    cur = _execute("SELECT 1 FROM promo_codes WHERE code = ?", (promo,))
+    if cur.fetchone() is None:
+        return False
+    _execute("DELETE FROM promo_activations WHERE code = ?", (promo,))
+    _execute("DELETE FROM promo_codes WHERE code = ?", (promo,))
+    return True
+
+
 def list_active_promo_codes() -> list[dict]:
     _cleanup_used_up_promo_codes()
     cur = _execute(
@@ -548,32 +735,43 @@ def list_active_promo_codes() -> list[dict]:
     return rows
 
 
+def _regular_defaults_sql_values() -> tuple:
+    return (
+        DEFAULT_MAX_PRICE,
+        ",".join(DEFAULT_KEYWORDS),
+        _memory_csv(list(DEFAULT_MEMORY_VOLUMES)),
+    )
+
+
 def revoke_vip(chat_id: int) -> None:
+    max_price, keywords, memory = _regular_defaults_sql_values()
     _execute(
         "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
-        "max_price = ?, keywords = ? "
+        "max_price = ?, keywords = ?, memory_volumes = ? "
         "WHERE chat_id = ?",
-        (DEFAULT_MAX_PRICE, ",".join(DEFAULT_KEYWORDS), chat_id),
+        (max_price, keywords, memory, chat_id),
     )
 
 
 def _expire_vip(chat_id: int) -> None:
     now = int(time.time())
+    max_price, keywords, memory = _regular_defaults_sql_values()
     _execute(
         "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
-        "max_price = ?, keywords = ? "
+        "max_price = ?, keywords = ?, memory_volumes = ? "
         "WHERE chat_id = ? AND role = 'vip' AND vip_until > 0 AND vip_until < ?",
-        (DEFAULT_MAX_PRICE, ",".join(DEFAULT_KEYWORDS), chat_id, now),
+        (max_price, keywords, memory, chat_id, now),
     )
 
 
 def _expire_all_vip() -> None:
     now = int(time.time())
+    max_price, keywords, memory = _regular_defaults_sql_values()
     _execute(
         "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
-        "max_price = ?, keywords = ? "
+        "max_price = ?, keywords = ?, memory_volumes = ? "
         "WHERE role = 'vip' AND vip_until > 0 AND vip_until < ?",
-        (DEFAULT_MAX_PRICE, ",".join(DEFAULT_KEYWORDS), now),
+        (max_price, keywords, memory, now),
     )
 
 

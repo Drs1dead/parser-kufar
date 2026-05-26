@@ -27,12 +27,42 @@ VIP_CHECK_INTERVAL = int(os.getenv("VIP_CHECK_INTERVAL", "60"))
 FIRST_RUN_LIMIT = int(os.getenv("FIRST_RUN_LIMIT", "3"))
 VIP_SUBSCRIPTION_DAYS = int(os.getenv("VIP_SUBSCRIPTION_DAYS", "30"))
 VIP_PRICE_USD = int(os.getenv("VIP_PRICE_USD", "2"))
+REFERRAL_VIP_DAYS_PER_FRIEND = max(1, int(os.getenv("REFERRAL_VIP_DAYS_PER_FRIEND", "1")))
+
+# Объёмы памяти для фильтра (строки в БД: "64", "128", …, "512+")
+MEMORY_VOLUME_OPTIONS: tuple[str, ...] = ("64", "128", "256", "512", "512+")
+DEFAULT_MEMORY_VOLUMES: tuple[str, ...] = ("64",)
+MEMORY_TIER_512_PLUS_GB = 512
+MEMORY_TOKEN_512_PLUS = "512+"
+
+
+def format_memory_volume(vol: str, *, short: bool = False) -> str:
+    """Подпись объёма для UI (в БД по-прежнему токен 512+)."""
+    if vol == MEMORY_TOKEN_512_PLUS:
+        return "более" if short else "от 512 ГБ"
+    return f"{vol} ГБ"
+
+
+# Белорусский рубль (BYN). Международное обозначение — Br (не ₽).
+CURRENCY_SIGN = "Br"
+
+
+def format_price(amount: int | float | None) -> str:
+    """Цена в белорусских рублях для отображения в боте."""
+    if amount is None:
+        return "не указана"
+    n = int(amount)
+    return f"{n:,}".replace(",", " ") + f" {CURRENCY_SIGN}"
+
+
 MARKET_DISCOUNT_THRESHOLD = float(os.getenv("MARKET_DISCOUNT_THRESHOLD", "0.85"))
 FILTER_DEBUG_LOG = os.getenv("FILTER_DEBUG_LOG", "").strip().lower() in (
     "1",
     "true",
     "yes",
 )
+_log_level = os.getenv("LOG_LEVEL", "INFO").strip().upper()
+LOG_LEVEL = _log_level if _log_level in ("DEBUG", "INFO", "WARNING", "ERROR") else "INFO"
 ADMIN_IDS = {
     int(x.strip())
     for x in os.getenv("ADMIN_IDS", "").split(",")
@@ -249,4 +279,38 @@ KUFAR_QUERIES: tuple[str, ...] = tuple(
     if q.strip()
 ) or ("iphone", "samsung galaxy s", "samsung galaxy z flip", "samsung galaxy z fold")
 KUFAR_REGION = int(os.getenv("KUFAR_REGION", "7"))
-KUFAR_SIZE = int(os.getenv("KUFAR_SIZE", "30"))
+KUFAR_SIZE = int(os.getenv("KUFAR_SIZE", "40"))
+
+# Не целый телефон: проверка по title + summary (стемы ловят стекла/стёкла).
+ACCESSORY_HEADLINE_STEMS: tuple[str, ...] = (
+    "коробк",
+    "стекл",
+    "стёкл",
+    "защитн",
+    "пленк",
+    "плёнк",
+    "чехол",
+    "чехл",
+    "аккумулятор",
+    "акб",
+    "батаре",
+    "модул",
+    "glass shield",
+    "ceramic",
+    "film",
+)
+
+WHOLE_PHONE_EXCLUDE_HEADLINE: tuple[str, ...] = (
+    "клон",
+    "clone",
+    "replica",
+    "реплик",
+    "копия",
+    "копии",
+    "муляж",
+    "подделк",
+    "дубликат",
+    "на запчаст",
+    "для запчаст",
+    "запчаст",
+)

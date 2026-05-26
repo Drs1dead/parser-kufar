@@ -1,0 +1,389 @@
+"""Меню: главная, цена, память, VIP, пауза, промокод."""
+import logging
+
+from aiogram import F, Router
+from aiogram.enums import ParseMode
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+
+from config import (
+    CURRENCY_SIGN,
+    DEFAULT_MEMORY_VOLUMES,
+    MAX_PRICE_PRESETS,
+    MEMORY_VOLUME_OPTIONS,
+)
+from db import (
+    get_user,
+    redeem_promo_code,
+    set_active,
+    set_vip,
+    update_max_price,
+    update_memory_volumes,
+    update_vip_feed_mode,
+)
+from bot_ui import (
+    HELP_TEXT,
+    back_keyboard,
+    back_row,
+    custom_price_prompt_text,
+    goods_category_keyboard,
+    goods_category_text,
+    home_keyboard,
+    home_text,
+    memory_keyboard,
+    memory_screen_text,
+    price_screen_text,
+    promo_back_keyboard,
+    promo_prompt_text,
+    vip_keyboard,
+    vip_text,
+)
+from handlers.admin import admin_home_text, admin_main_keyboard
+from handlers.goods_ui import _is_vip_user
+from handlers.helpers import is_admin, maybe_refresh_username, safe_edit_message
+from handlers.start import present_home
+from handlers.states import CustomPriceState, PromoCodeState
+from logging_setup import log_exception
+
+log = logging.getLogger(__name__)
+router = Router()
+
+def price_presets_keyboard(user: dict | None) -> InlineKeyboardMarkup:
+    cur = user.get("max_price") if user else None
+    row: list[InlineKeyboardButton] = []
+    rows: list[list[InlineKeyboardButton]] = []
+    for p in MAX_PRICE_PRESETS:
+        short = f"{p} {CURRENCY_SIGN}"
+        label = f"✅ {short}" if cur is not None and int(cur) == int(p) else short
+        row.append(InlineKeyboardButton(text=label, callback_data=f"nav:set:{p}"))
+        if len(row) >= 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    if _is_vip_user(user):
+        rows.append([InlineKeyboardButton(text="🎯 Своя цена (VIP)", callback_data="nav:price:custom")])
+    rows.append(back_row())
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("mem:t:"))
+async def on_memory_toggle(cb: CallbackQuery) -> None:
+    if cb.message is None:
+        await cb.answer()
+        return
+    chat_id = cb.message.chat.id
+    user = get_user(chat_id)
+    if user is None:
+        await cb.answer("Сначала /start", show_alert=True)
+        return
+    vol = (cb.data or "")[6:]
+    if vol not in MEMORY_VOLUME_OPTIONS:
+        await cb.answer("Неизвестный объём", show_alert=True)
+        return
+
+    current = list(user.get("memory_volumes") or DEFAULT_MEMORY_VOLUMES)
+    selected = set(current)
+    if _is_vip_user(user):
+        if vol in selected:
+            if len(selected) <= 1:
+                await cb.answer("Нельзя снять последний объём (минимум 64 GB)", show_alert=True)
+                return
+            selected.remove(vol)
+        else:
+            selected.add(vol)
+        new_vols = [v for v in MEMORY_VOLUME_OPTIONS if v in selected]
+    else:
+        new_vols = [vol]
+
+    update_memory_volumes(chat_id, new_vols)
+    user = get_user(chat_id)
+    await safe_edit_message(
+        cb,
+        memory_screen_text(user),
+        reply_markup=memory_keyboard(user),
+    )
+    await cb.answer("💾 Сохранено")
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("nav:"))
+async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
+    if cb.message is None:
+        await cb.answer()
+        return
+    chat_id = cb.message.chat.id
+    uid = cb.from_user.id if cb.from_user else 0
+    data = (cb.data or "").strip()
+    parts = data.split(":")
+
+    maybe_refresh_username(chat_id, cb.from_user)
+    user = get_user(chat_id)
+    user_is_admin = is_admin(uid)
+
+    try:
+        if data == "nav:home":
+            await state.clear()
+            if user is None:
+                await safe_edit_message(
+                    cb,
+                    "Сначала нажми <code>/start</code>.",
+                    reply_markup=None,
+                )
+                await cb.answer()
+                return
+            await safe_edit_message(
+                cb,
+                home_text(user, is_new=False),
+                reply_markup=home_keyboard(is_admin=user_is_admin, user=user),
+            )
+            await cb.answer()
+            return
+
+        if user is None:
+            await cb.answer("Сначала /start", show_alert=True)
+            return
+
+        if data == "nav:resume":
+            if user.get("active"):
+                await cb.answer("Уведомления уже включены")
+                return
+            set_active(chat_id, True)
+            log.debug("resume chat_id=%s", chat_id)
+            user = get_user(chat_id)
+            if user is None:
+                await cb.answer("Ошибка", show_alert=True)
+                return
+            await safe_edit_message(
+                cb,
+                home_text(user, is_new=False),
+                reply_markup=home_keyboard(is_admin=user_is_admin, user=user),
+            )
+            await cb.answer("🔔 Уведомления включены")
+            return
+
+        if data in ("nav:vipf:bm", "nav:vipf:ex"):
+            if user.get("role") != "vip":
+                await cb.answer("Только для VIP", show_alert=True)
+                return
+            cur = user.get("vip_feed_mode") or "normal"
+            if data == "nav:vipf:bm":
+                new_mode = "normal" if cur == "below_market" else "below_market"
+            else:
+                new_mode = "normal" if cur == "exchange" else "exchange"
+            update_vip_feed_mode(chat_id, new_mode)
+            user = get_user(chat_id)
+            if user is None:
+                await cb.answer("Ошибка", show_alert=True)
+                return
+            await safe_edit_message(
+                cb,
+                vip_text(user),
+                reply_markup=vip_keyboard(user),
+            )
+            hint = (
+                "🔥 Поток «ниже рынка»"
+                if new_mode == "below_market"
+                else (
+                    "🔄 Поток «обмен»"
+                    if new_mode == "exchange"
+                    else "📬 Обычная рассылка"
+                )
+            )
+            await cb.answer(hint)
+            return
+
+        if data == "nav:goods":
+            await safe_edit_message(
+                cb,
+                goods_category_text(),
+                reply_markup=goods_category_keyboard(),
+            )
+            await cb.answer()
+            return
+
+        if data == "nav:price":
+            await state.clear()
+            await safe_edit_message(
+                cb,
+                price_screen_text(user),
+                reply_markup=price_presets_keyboard(user),
+            )
+            await cb.answer()
+            return
+
+        if data == "nav:memory":
+            await state.clear()
+            await safe_edit_message(
+                cb,
+                memory_screen_text(user),
+                reply_markup=memory_keyboard(user),
+            )
+            await cb.answer()
+            return
+
+        if data == "nav:price:custom":
+            if not _is_vip_user(user):
+                await cb.answer("Только для VIP", show_alert=True)
+                return
+            await state.set_state(CustomPriceState.waiting_price)
+            await safe_edit_message(
+                cb,
+                custom_price_prompt_text(),
+                reply_markup=back_keyboard(),
+            )
+            await cb.answer()
+            return
+
+        if len(parts) == 3 and parts[0] == "nav" and parts[1] == "set" and parts[2].isdigit():
+            price = int(parts[2])
+            if 1 <= price <= 10_000_000:
+                update_max_price(chat_id, price)
+            user = get_user(chat_id)
+            await safe_edit_message(
+                cb,
+                price_screen_text(user),
+                reply_markup=price_presets_keyboard(user),
+            )
+            await cb.answer("💰 Лимит сохранён")
+            return
+
+        if data == "nav:promo":
+            await state.set_state(PromoCodeState.waiting_code)
+            await safe_edit_message(
+                cb,
+                promo_prompt_text(),
+                reply_markup=promo_back_keyboard(),
+            )
+            await cb.answer()
+            return
+
+        if data == "nav:vip":
+            await safe_edit_message(
+                cb,
+                vip_text(user),
+                reply_markup=vip_keyboard(user),
+            )
+            await cb.answer()
+            return
+
+        if data == "nav:help":
+            await safe_edit_message(
+                cb,
+                HELP_TEXT,
+                reply_markup=back_keyboard(),
+            )
+            await cb.answer()
+            return
+
+        if data == "nav:stop":
+            set_active(chat_id, False)
+            log.debug("stop chat_id=%s", chat_id)
+            user = get_user(chat_id)
+            await safe_edit_message(
+                cb,
+                home_text(user, is_new=False),
+                reply_markup=home_keyboard(is_admin=user_is_admin, user=user)
+                if user
+                else back_keyboard(),
+            )
+            await cb.answer("🔕 На паузе")
+            return
+
+        if data == "nav:admin":
+            if not user_is_admin:
+                await cb.answer("Нет доступа", show_alert=True)
+                return
+            await state.clear()
+            await safe_edit_message(
+                cb,
+                admin_home_text(),
+                reply_markup=admin_main_keyboard(),
+            )
+            await cb.answer()
+            return
+
+        await cb.answer("Неизвестное действие", show_alert=True)
+    except Exception:
+        log_exception(log, "nav error data=%s", data)
+        try:
+            await cb.answer("Ошибка", show_alert=True)
+        except Exception:
+            pass
+@router.message(CustomPriceState.waiting_price, F.text, ~F.text.startswith("/"))
+async def on_custom_price_text(msg: Message, state: FSMContext) -> None:
+    chat_id = msg.chat.id
+    maybe_refresh_username(chat_id, msg.from_user)
+    user = get_user(chat_id)
+    if user is None:
+        await state.clear()
+        await msg.answer("Сначала нажми <code>/start</code>.", parse_mode=ParseMode.HTML)
+        return
+    if not _is_vip_user(user):
+        await state.clear()
+        await msg.answer("Индивидуальная цена доступна только для VIP.", parse_mode=ParseMode.HTML)
+        return
+
+    raw = (msg.text or "").strip().replace(" ", "")
+    if not raw.isdigit():
+        await msg.answer(
+            "Введите цену одним числом, например <code>1200</code>.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    price = int(raw)
+    if not 1 <= price <= 10_000_000:
+        await msg.answer(
+            f"Цена должна быть от 1 до 10 000 000 {CURRENCY_SIGN}. Введите значение заново.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    update_max_price(chat_id, price)
+    await state.clear()
+    updated = get_user(chat_id)
+    await msg.answer(
+        price_screen_text(updated),
+        reply_markup=price_presets_keyboard(updated),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(PromoCodeState.waiting_code, F.text, ~F.text.startswith("/"))
+async def on_promo_code_text(msg: Message, state: FSMContext) -> None:
+    chat_id = msg.chat.id
+    maybe_refresh_username(chat_id, msg.from_user)
+    user = get_user(chat_id)
+    if user is None:
+        await state.clear()
+        await msg.answer(
+            "Сначала нажми <code>/start</code>.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    status, days = redeem_promo_code(chat_id, msg.text or "")
+    if status == "ok" and days is not None:
+        set_vip(chat_id, days=days)
+        await state.clear()
+        updated_user = get_user(chat_id)
+        uid = _actor_user_id(msg)
+        await msg.answer(
+            f"🎉 Промокод принят! VIP на <b>{days}</b> дн. — настройте бот в меню.",
+            reply_markup=home_keyboard(is_admin=is_admin(uid), user=updated_user),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if status == "already_used":
+        await msg.answer(
+            "❌ Промокод уже был использован. Попробуйте другой:",
+            reply_markup=promo_back_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    await msg.answer(
+        "❌ Промокод не найден. Проверьте и отправьте снова:",
+        reply_markup=promo_back_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )

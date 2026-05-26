@@ -15,6 +15,7 @@ from config import (
     KUFAR_REGION,
     KUFAR_SIZE,
 )
+from filters import parse_memory_gb_text
 
 log = logging.getLogger(__name__)
 
@@ -107,13 +108,20 @@ def normalize_listing(raw: dict) -> Optional[dict]:
         return None
 
     ad_params = raw.get("ad_parameters") or []
+    phone_model = _param_label(ad_params, "phone_model").strip()
+    phone_memory = _param_label(ad_params, "phone_memory").strip()
+    summary = _build_summary(ad_params)
+    memory_gb = parse_memory_gb_text(phone_memory) or parse_memory_gb_text(summary)
     return {
         "ad_id": ad_id,
         "title": subject,
         "price": _price_from_cents(raw.get("price_byn")),
         "price_usd": _price_from_cents(raw.get("price_usd")),
         "location": _build_location(ad_params),
-        "summary": _build_summary(ad_params),
+        "summary": summary,
+        "phone_model": phone_model,
+        "phone_memory": phone_memory,
+        "memory_gb": memory_gb,
         "description": "",
         "link": link.split("?")[0],
         "list_time": raw.get("list_time"),
@@ -139,9 +147,19 @@ async def _fetch_search(session: aiohttp.ClientSession, query: str) -> list[dict
                 if r.status >= 500 or r.status == 429:
                     body = (await r.text())[:200]
                     last_err = f"status={r.status} {body}"
-                    log.warning("[KUFAR] search query=%r %s (попытка %s/%s)", query, last_err, attempt, KUFAR_FETCH_RETRIES)
+                    log.warning(
+                        "kufar search retry query=%r %s attempt=%s/%s",
+                        query,
+                        last_err,
+                        attempt,
+                        KUFAR_FETCH_RETRIES,
+                    )
                 elif r.status != 200:
-                    log.error("[KUFAR] search query=%r status=%s body=%s", query, r.status, (await r.text())[:300])
+                    log.error(
+                        "kufar search failed query=%r status=%s",
+                        query,
+                        r.status,
+                    )
                     return []
                 else:
                     data = await r.json()
@@ -149,7 +167,7 @@ async def _fetch_search(session: aiohttp.ClientSession, query: str) -> list[dict
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             last_err = repr(e)
             log.warning(
-                "[KUFAR] search query=%r сеть: %s (попытка %s/%s)",
+                "kufar search network query=%r %s attempt=%s/%s",
                 query,
                 last_err,
                 attempt,
@@ -158,7 +176,12 @@ async def _fetch_search(session: aiohttp.ClientSession, query: str) -> list[dict
         if attempt < KUFAR_FETCH_RETRIES:
             await asyncio.sleep(KUFAR_FETCH_RETRY_DELAY * attempt)
     if last_err:
-        log.error("[KUFAR] search query=%r не удался после %s попыток: %s", query, KUFAR_FETCH_RETRIES, last_err)
+        log.error(
+            "kufar search exhausted query=%r attempts=%s err=%s",
+            query,
+            KUFAR_FETCH_RETRIES,
+            last_err,
+        )
     return []
 
 
@@ -232,11 +255,12 @@ async def fetch_ads(*, with_description: bool = True) -> list[dict]:
     Объявления с листинга. Поля: ad_id, title, price, price_usd, location,
     summary, description, link, list_time, photo_urls.
     """
+    raw_ads: list[dict] = []
+    ads: list[dict] = []
     connector = aiohttp.TCPConnector(limit=8)
     async with aiohttp.ClientSession(
         headers=DEFAULT_HEADERS, connector=connector
     ) as session:
-        raw_ads: list[dict] = []
         seen_ids: set[str] = set()
         for query in KUFAR_QUERIES:
             for raw in await _fetch_search(session, query):
@@ -246,9 +270,6 @@ async def fetch_ads(*, with_description: bool = True) -> list[dict]:
                 if raw_id:
                     seen_ids.add(raw_id)
                 raw_ads.append(raw)
-        log.info("[KUFAR] сырых объявлений: %d", len(raw_ads))
-
-        ads: list[dict] = []
         for raw in raw_ads:
             item = normalize_listing(raw)
             if item is not None:
@@ -258,5 +279,5 @@ async def fetch_ads(*, with_description: bool = True) -> list[dict]:
             sem = asyncio.Semaphore(5)
             await asyncio.gather(*(_enrich_description(session, ad, sem) for ad in ads))
 
-    log.info("[KUFAR] после нормализации: %d", len(ads))
+    log.debug("kufar listings raw=%d normalized=%d", len(raw_ads), len(ads))
     return ads
