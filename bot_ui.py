@@ -9,6 +9,8 @@ from config import (
     DEFAULT_MEMORY_VOLUMES,
     MEMORY_VOLUME_OPTIONS,
     REFERRAL_VIP_DAYS_PER_FRIEND,
+    REGULAR_CHECK_INTERVAL,
+    VIP_CHECK_INTERVAL,
     VIP_PRICE_USD,
     format_memory_volume,
     format_price,
@@ -142,10 +144,14 @@ def home_text(user: dict | None, *, is_new: bool) -> str:
         lines += ["", "💡 <i>Сначала выберите модели в «Товары» — иначе искать нечего.</i>"]
 
     if not active:
+        interval_min = max(1, REGULAR_CHECK_INTERVAL // 60)
+        if user.get("role") == "vip":
+            interval_min = max(1, VIP_CHECK_INTERVAL // 60)
         lines += [
             "",
             "💤 <i>Новые объявления пока не приходят.</i>",
             "Нажмите <b>«Включить уведомления»</b> внизу 👇",
+            f"<i>После включения первые совпадения обычно в течение ~{interval_min} мин.</i>",
         ]
 
     mode = user.get("vip_feed_mode") or "normal"

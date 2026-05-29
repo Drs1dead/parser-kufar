@@ -1,6 +1,8 @@
 """Сопоставление объявлений Kufar с фильтрами пользователя (ядро рассылки)."""
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from config import FILTER_DEBUG_LOG, MARKET_DISCOUNT_THRESHOLD
 from db import avg_market_price
 from filters import (
@@ -51,42 +53,72 @@ def _market_avg(device_key: str, cache: dict[str, int | None]) -> int | None:
     return value
 
 
+def _match_vip_ads(
+    user: dict,
+    ads: list[dict],
+    market_cache: dict[str, int | None],
+    feed_mode: str,
+    *,
+    accept: Callable[[dict, dict, dict[str, int | None]], bool],
+) -> list[dict]:
+    matched: list[dict] = []
+    for ad in ads:
+        if not _passes_base(ad, user, max_price=VIP_SPECIAL_MAX_PRICE):
+            _log_reject(ad, user, max_price=VIP_SPECIAL_MAX_PRICE, feed_mode=feed_mode)
+            continue
+        if accept(ad, user, market_cache):
+            matched.append(ad)
+    return matched
+
+
+def _below_market_accept(ad: dict, user: dict, market_cache: dict[str, int | None]) -> bool:
+    dk = ad_device_key(ad)
+    price = ad.get("price")
+    if not dk or not isinstance(price, int) or price <= 0:
+        return False
+    mavg = _market_avg(dk, market_cache)
+    return bool(mavg and price < int(mavg * MARKET_DISCOUNT_THRESHOLD))
+
+
+def _exchange_accept(ad: dict, user: dict, market_cache: dict[str, int | None]) -> bool:
+    reason = exchange_reject_reason(ad)
+    if reason:
+        log_filter_reject(
+            ad,
+            reason,
+            chat_id=user["chat_id"],
+            feed_mode=(user.get("vip_feed_mode") or "normal"),
+        )
+        return False
+    return True
+
+
 def match_ads_for_user(
     user: dict,
     ads: list[dict],
     market_cache: dict[str, int | None],
 ) -> list[dict]:
     """Возвращает объявления, подходящие пользователю под его VIP-поток и фильтры."""
-    chat_id = user["chat_id"]
     is_vip = user.get("role") == "vip"
     feed_mode = (user.get("vip_feed_mode") or "normal") if is_vip else "normal"
 
     if is_vip and feed_mode == "below_market":
-        matched: list[dict] = []
-        for ad in ads:
-            if not _passes_base(ad, user, max_price=VIP_SPECIAL_MAX_PRICE):
-                _log_reject(ad, user, max_price=VIP_SPECIAL_MAX_PRICE, feed_mode=feed_mode)
-                continue
-            dk = ad_device_key(ad)
-            price = ad.get("price")
-            if not dk or not isinstance(price, int) or price <= 0:
-                continue
-            mavg = _market_avg(dk, market_cache)
-            if mavg and price < int(mavg * MARKET_DISCOUNT_THRESHOLD):
-                matched.append(ad)
-        return matched
+        return _match_vip_ads(
+            user,
+            ads,
+            market_cache,
+            feed_mode,
+            accept=_below_market_accept,
+        )
 
     if is_vip and feed_mode == "exchange":
-        matched = []
-        for ad in ads:
-            if not _passes_base(ad, user, max_price=VIP_SPECIAL_MAX_PRICE):
-                _log_reject(ad, user, max_price=VIP_SPECIAL_MAX_PRICE, feed_mode=feed_mode)
-                continue
-            if exchange_reject_reason(ad):
-                log_filter_reject(ad, exchange_reject_reason(ad) or "", chat_id=chat_id, feed_mode=feed_mode)
-                continue
-            matched.append(ad)
-        return matched
+        return _match_vip_ads(
+            user,
+            ads,
+            market_cache,
+            feed_mode,
+            accept=_exchange_accept,
+        )
 
     max_price = int(user.get("max_price") or 0)
     out: list[dict] = []

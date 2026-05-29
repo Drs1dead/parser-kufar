@@ -14,6 +14,7 @@ from config import (
     DEFAULT_MAX_PRICE,
     DEFAULT_MEMORY_VOLUMES,
     MEMORY_VOLUME_OPTIONS,
+    PRICE_DATA_RETENTION_DAYS,
     REFERRAL_VIP_DAYS_PER_FRIEND,
     SQLITE_BUSY_TIMEOUT,
     SQLITE_SYNCHRONOUS,
@@ -241,6 +242,8 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_seen_chat ON seen_ads(chat_id);
         CREATE INDEX IF NOT EXISTS idx_sent_prices_lookup ON sent_prices(chat_id, device_key);
         CREATE INDEX IF NOT EXISTS idx_market_prices_device ON market_prices(device_key);
+        CREATE INDEX IF NOT EXISTS idx_market_prices_sent_at ON market_prices(sent_at);
+        CREATE INDEX IF NOT EXISTS idx_sent_prices_sent_at ON sent_prices(sent_at);
         CREATE INDEX IF NOT EXISTS idx_promo_activations_code ON promo_activations(code);
         """
     )
@@ -283,6 +286,14 @@ def init_db() -> None:
         (TRIAL_PROMO_CODE, TRIAL_PROMO_DAYS, int(time.time())),
     )
     _cleanup_used_up_promo_codes()
+    deleted = prune_price_tables()
+    if deleted[0] or deleted[1]:
+        log.info(
+            "price tables pruned on init market=%s sent=%s retention_days=%s",
+            deleted[0],
+            deleted[1],
+            PRICE_DATA_RETENTION_DAYS,
+        )
 
 
 def _backfill_referral_codes() -> None:
@@ -374,7 +385,7 @@ def count_users_active() -> int:
 
 
 def count_users_vip() -> int:
-    _expire_all_vip()
+    expire_all_vip()
     now = int(time.time())
     cur = _execute(
         "SELECT COUNT(*) FROM users WHERE role = 'vip' AND vip_until > ?",
@@ -384,7 +395,7 @@ def count_users_vip() -> int:
 
 
 def list_users_page(*, offset: int, limit: int) -> list[dict]:
-    _expire_all_vip()
+    expire_all_vip()
     cur = _execute(
         f"SELECT {_USER_SELECT} FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?",
         (limit, offset),
@@ -397,32 +408,37 @@ def clear_market_prices() -> int:
     return cur.rowcount if cur.rowcount is not None else 0
 
 
-def get_active_users() -> list[dict]:
-    _expire_all_vip()
+def get_active_users(*, expire_vip: bool = True) -> list[dict]:
+    if expire_vip:
+        expire_all_vip()
     cur = _execute(f"SELECT {_USER_SELECT} FROM users WHERE active = 1")
     return [_row_to_user(r) for r in cur.fetchall()]
 
 
-def update_max_price(chat_id: int, max_price: int) -> None:
+def update_max_price(chat_id: int, max_price: int) -> int:
     _execute(
         "UPDATE users SET max_price = ? WHERE chat_id = ?",
         (max_price, chat_id),
     )
+    return int(max_price)
 
 
-def update_keywords(chat_id: int, keywords: list[str]) -> None:
+def update_keywords(chat_id: int, keywords: list[str]) -> list[str]:
     cleaned = [k.strip().lower() for k in keywords if k.strip()]
     _execute(
         "UPDATE users SET keywords = ? WHERE chat_id = ?",
         (",".join(cleaned), chat_id),
     )
+    return cleaned
 
 
-def update_memory_volumes(chat_id: int, volumes: list[str]) -> None:
+def update_memory_volumes(chat_id: int, volumes: list[str]) -> list[str]:
+    normalized = _norm_memory_volumes(volumes)
     _execute(
         "UPDATE users SET memory_volumes = ? WHERE chat_id = ?",
-        (_memory_csv(volumes), chat_id),
+        (_memory_csv(normalized), chat_id),
     )
+    return normalized
 
 
 def ensure_referral_code(chat_id: int) -> str:
@@ -515,12 +531,17 @@ def reset_user_filters(chat_id: int) -> None:
     )
 
 
-def is_seen(chat_id: int, link: str) -> bool:
+def seen_links_for(chat_id: int, links: list[str]) -> set[str]:
+    """Ссылки из links, уже отмеченные как просмотренные для chat_id."""
+    unique = [l for l in dict.fromkeys(links) if isinstance(l, str) and l.strip()]
+    if not unique:
+        return set()
+    placeholders = ",".join("?" * len(unique))
     cur = _execute(
-        "SELECT 1 FROM seen_ads WHERE chat_id = ? AND link = ?",
-        (chat_id, link),
+        f"SELECT link FROM seen_ads WHERE chat_id = ? AND link IN ({placeholders})",
+        (chat_id, *unique),
     )
-    return cur.fetchone() is not None
+    return {row[0] for row in cur.fetchall()}
 
 
 def mark_seen(chat_id: int, link: str) -> None:
@@ -542,26 +563,6 @@ def increment_sent(chat_id: int) -> None:
     )
 
 
-def save_sent_price(chat_id: int, link: str, device_key: str, price: int) -> None:
-    _execute(
-        "INSERT OR IGNORE INTO sent_prices (chat_id, link, device_key, price, sent_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (chat_id, link, device_key, price, int(time.time())),
-    )
-
-
-def avg_sent_price(chat_id: int, device_key: str) -> int | None:
-    cur = _execute(
-        "SELECT AVG(price) FROM sent_prices WHERE chat_id = ? AND device_key = ?",
-        (chat_id, device_key),
-    )
-    row = cur.fetchone()
-    avg_value = row[0] if row else None
-    if avg_value is None:
-        return None
-    return int(avg_value)
-
-
 def save_market_price(link: str, device_key: str, price: int) -> None:
     _execute(
         "INSERT OR IGNORE INTO market_prices (link, device_key, price, sent_at) "
@@ -570,10 +571,26 @@ def save_market_price(link: str, device_key: str, price: int) -> None:
     )
 
 
+def _price_retention_cutoff(retention_days: int | None = None) -> int:
+    days = retention_days if retention_days is not None else PRICE_DATA_RETENTION_DAYS
+    return int(time.time()) - max(1, int(days)) * 86400
+
+
+def prune_price_tables(retention_days: int | None = None) -> tuple[int, int]:
+    """Удаляет записи market_prices и sent_prices старше retention_days."""
+    cutoff = _price_retention_cutoff(retention_days)
+    cur_m = _execute("DELETE FROM market_prices WHERE sent_at < ?", (cutoff,))
+    cur_s = _execute("DELETE FROM sent_prices WHERE sent_at < ?", (cutoff,))
+    deleted_m = cur_m.rowcount if cur_m.rowcount is not None else 0
+    deleted_s = cur_s.rowcount if cur_s.rowcount is not None else 0
+    return deleted_m, deleted_s
+
+
 def avg_market_price(device_key: str) -> int | None:
+    cutoff = _price_retention_cutoff()
     cur = _execute(
-        "SELECT AVG(price) FROM market_prices WHERE device_key = ?",
-        (device_key,),
+        "SELECT AVG(price) FROM market_prices WHERE device_key = ? AND sent_at >= ?",
+        (device_key, cutoff),
     )
     row = cur.fetchone()
     avg_value = row[0] if row else None
@@ -645,7 +662,7 @@ def redeem_promo_code(chat_id: int, code: str) -> tuple[str, int | None]:
     max_uses = int(row[2] or 0)
     if max_uses > 0 and _promo_uses_count(promo) >= max_uses:
         _execute("DELETE FROM promo_codes WHERE code = ?", (promo,))
-        return "not_found", None
+        return "exhausted", None
 
     try:
         _execute(
@@ -718,17 +735,27 @@ def delete_promo_code(code: str) -> bool:
 def list_active_promo_codes() -> list[dict]:
     _cleanup_used_up_promo_codes()
     cur = _execute(
-        "SELECT code, vip_days, max_uses, created_at FROM promo_codes WHERE is_active = 1 ORDER BY created_at DESC"
+        """
+        SELECT p.code, p.vip_days, p.max_uses, p.created_at,
+               COALESCE(a.uses, 0) AS uses
+        FROM promo_codes p
+        LEFT JOIN (
+            SELECT code, COUNT(*) AS uses
+            FROM promo_activations
+            GROUP BY code
+        ) a ON a.code = p.code
+        WHERE p.is_active = 1
+        ORDER BY p.created_at DESC
+        """
     )
     rows = []
-    for code, vip_days, max_uses, created_at in cur.fetchall():
-        uses = _promo_uses_count(code)
+    for code, vip_days, max_uses, created_at, uses in cur.fetchall():
         rows.append(
             {
                 "code": code,
                 "vip_days": int(vip_days or 0),
                 "max_uses": int(max_uses or 0),
-                "uses": uses,
+                "uses": int(uses or 0),
                 "created_at": int(created_at or 0),
             }
         )
@@ -753,26 +780,46 @@ def revoke_vip(chat_id: int) -> None:
     )
 
 
-def _expire_vip(chat_id: int) -> None:
-    now = int(time.time())
-    max_price, keywords, memory = _regular_defaults_sql_values()
-    _execute(
-        "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
-        "max_price = ?, keywords = ?, memory_volumes = ? "
-        "WHERE chat_id = ? AND role = 'vip' AND vip_until > 0 AND vip_until < ?",
-        (max_price, keywords, memory, chat_id, now),
-    )
+def _vip_expiry_memory_sql() -> str:
+    return _memory_csv(list(DEFAULT_MEMORY_VOLUMES))
 
 
-def _expire_all_vip() -> None:
+def _expire_vip(chat_id: int) -> bool:
+    """Снимает VIP: память → 64 GB, модели и цена сохраняются."""
     now = int(time.time())
-    max_price, keywords, memory = _regular_defaults_sql_values()
+    cur = _execute(
+        "SELECT 1 FROM users WHERE chat_id = ? AND role = 'vip' "
+        "AND vip_until > 0 AND vip_until < ?",
+        (chat_id, now),
+    )
+    if cur.fetchone() is None:
+        return False
+    memory = _vip_expiry_memory_sql()
     _execute(
         "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
-        "max_price = ?, keywords = ?, memory_volumes = ? "
-        "WHERE role = 'vip' AND vip_until > 0 AND vip_until < ?",
-        (max_price, keywords, memory, now),
+        "memory_volumes = ? WHERE chat_id = ?",
+        (memory, chat_id),
     )
+    return True
+
+
+def expire_all_vip() -> list[int]:
+    """Снимает VIP у всех с истёкшим сроком. Возвращает chat_id затронутых пользователей."""
+    now = int(time.time())
+    cur = _execute(
+        "SELECT chat_id FROM users WHERE role = 'vip' AND vip_until > 0 AND vip_until < ?",
+        (now,),
+    )
+    expired = [int(row[0]) for row in cur.fetchall()]
+    if not expired:
+        return []
+    memory = _vip_expiry_memory_sql()
+    _execute(
+        "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
+        "memory_volumes = ? WHERE role = 'vip' AND vip_until > 0 AND vip_until < ?",
+        (memory, now),
+    )
+    return expired
 
 
 def _promo_uses_count(code: str) -> int:

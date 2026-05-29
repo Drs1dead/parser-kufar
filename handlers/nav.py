@@ -40,7 +40,13 @@ from bot_ui import (
 )
 from handlers.admin import admin_home_text, admin_main_keyboard
 from handlers.goods_ui import _is_vip_user
-from handlers.helpers import is_admin, maybe_refresh_username, safe_edit_message
+from handlers.helpers import (
+    actor_user_id,
+    is_admin,
+    maybe_refresh_username,
+    require_user_cb,
+    safe_edit_message,
+)
 from handlers.start import present_home
 from handlers.states import CustomPriceState, PromoCodeState
 from logging_setup import log_exception
@@ -72,11 +78,11 @@ async def on_memory_toggle(cb: CallbackQuery) -> None:
     if cb.message is None:
         await cb.answer()
         return
-    chat_id = cb.message.chat.id
-    user = get_user(chat_id)
+    maybe_refresh_username(cb.message.chat.id, cb.from_user)
+    user = await require_user_cb(cb)
     if user is None:
-        await cb.answer("Сначала /start", show_alert=True)
         return
+    chat_id = cb.message.chat.id
     vol = (cb.data or "")[6:]
     if vol not in MEMORY_VOLUME_OPTIONS:
         await cb.answer("Неизвестный объём", show_alert=True)
@@ -96,8 +102,7 @@ async def on_memory_toggle(cb: CallbackQuery) -> None:
     else:
         new_vols = [vol]
 
-    update_memory_volumes(chat_id, new_vols)
-    user = get_user(chat_id)
+    user["memory_volumes"] = update_memory_volumes(chat_id, new_vols)
     await safe_edit_message(
         cb,
         memory_screen_text(user),
@@ -124,19 +129,19 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
         if data == "nav:home":
             await state.clear()
             if user is None:
+                await cb.answer()
                 await safe_edit_message(
                     cb,
-                    "Сначала нажми <code>/start</code>.",
+                    "Сначала нажмите <code>/start</code>.",
                     reply_markup=None,
                 )
-                await cb.answer()
                 return
+            await cb.answer()
             await safe_edit_message(
                 cb,
                 home_text(user, is_new=False),
                 reply_markup=home_keyboard(is_admin=user_is_admin, user=user),
             )
-            await cb.answer()
             return
 
         if user is None:
@@ -147,18 +152,21 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
             if user.get("active"):
                 await cb.answer("Уведомления уже включены")
                 return
+            if not (user.get("keywords") or []):
+                await cb.answer(
+                    "Сначала выберите модели в «Товары» — иначе искать нечего.",
+                    show_alert=True,
+                )
+                return
             set_active(chat_id, True)
             log.debug("resume chat_id=%s", chat_id)
-            user = get_user(chat_id)
-            if user is None:
-                await cb.answer("Ошибка", show_alert=True)
-                return
+            user["active"] = True
+            await cb.answer("🔔 Уведомления включены")
             await safe_edit_message(
                 cb,
                 home_text(user, is_new=False),
                 reply_markup=home_keyboard(is_admin=user_is_admin, user=user),
             )
-            await cb.answer("🔔 Уведомления включены")
             return
 
         if data in ("nav:vipf:bm", "nav:vipf:ex"):
@@ -171,10 +179,7 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
             else:
                 new_mode = "normal" if cur == "exchange" else "exchange"
             update_vip_feed_mode(chat_id, new_mode)
-            user = get_user(chat_id)
-            if user is None:
-                await cb.answer("Ошибка", show_alert=True)
-                return
+            user["vip_feed_mode"] = new_mode
             await safe_edit_message(
                 cb,
                 vip_text(user),
@@ -237,8 +242,7 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
         if len(parts) == 3 and parts[0] == "nav" and parts[1] == "set" and parts[2].isdigit():
             price = int(parts[2])
             if 1 <= price <= 10_000_000:
-                update_max_price(chat_id, price)
-            user = get_user(chat_id)
+                user["max_price"] = update_max_price(chat_id, price)
             await safe_edit_message(
                 cb,
                 price_screen_text(user),
@@ -278,13 +282,11 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
         if data == "nav:stop":
             set_active(chat_id, False)
             log.debug("stop chat_id=%s", chat_id)
-            user = get_user(chat_id)
+            user["active"] = False
             await safe_edit_message(
                 cb,
                 home_text(user, is_new=False),
-                reply_markup=home_keyboard(is_admin=user_is_admin, user=user)
-                if user
-                else back_keyboard(),
+                reply_markup=home_keyboard(is_admin=user_is_admin, user=user),
             )
             await cb.answer("🔕 На паузе")
             return
@@ -338,12 +340,11 @@ async def on_custom_price_text(msg: Message, state: FSMContext) -> None:
         )
         return
 
-    update_max_price(chat_id, price)
+    user["max_price"] = update_max_price(chat_id, price)
     await state.clear()
-    updated = get_user(chat_id)
     await msg.answer(
-        price_screen_text(updated),
-        reply_markup=price_presets_keyboard(updated),
+        price_screen_text(user),
+        reply_markup=price_presets_keyboard(user),
         parse_mode=ParseMode.HTML,
     )
 
@@ -366,10 +367,18 @@ async def on_promo_code_text(msg: Message, state: FSMContext) -> None:
         set_vip(chat_id, days=days)
         await state.clear()
         updated_user = get_user(chat_id)
-        uid = _actor_user_id(msg)
+        uid = actor_user_id(msg)
         await msg.answer(
             f"🎉 Промокод принят! VIP на <b>{days}</b> дн. — настройте бот в меню.",
             reply_markup=home_keyboard(is_admin=is_admin(uid), user=updated_user),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if status == "exhausted":
+        await msg.answer(
+            "❌ Промокод исчерпан (лимит активаций). Попробуйте другой:",
+            reply_markup=promo_back_keyboard(),
             parse_mode=ParseMode.HTML,
         )
         return

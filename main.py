@@ -10,7 +10,9 @@ from aiogram.enums import ParseMode
 import bot_ui
 import handlers
 from config import (
+    ADMIN_IDS,
     CHECK_INTERVAL,
+    MARKET_DISCOUNT_THRESHOLD,
     REGULAR_CHECK_INTERVAL,
     SQLITE_SYNCHRONOUS,
     TOKEN,
@@ -28,6 +30,14 @@ async def main() -> None:
 
     if not TOKEN:
         log.error("TOKEN missing in .env")
+        sys.exit(1)
+    if not ADMIN_IDS:
+        log.warning("ADMIN_IDS empty — admin panel unavailable")
+    if CHECK_INTERVAL < 1:
+        log.error("CHECK_INTERVAL must be >= 1")
+        sys.exit(1)
+    if not 0 < MARKET_DISCOUNT_THRESHOLD < 1:
+        log.error("MARKET_DISCOUNT_THRESHOLD must be between 0 and 1")
         sys.exit(1)
 
     init_db()

@@ -14,7 +14,7 @@ from goods_tree import (
     SAMSUNG_LINES,
     SAMSUNG_SERIES_LABELS,
 )
-from db import get_user, update_keywords
+from db import update_keywords
 from bot_ui import goods_category_keyboard, goods_category_text, home_keyboard, home_text
 from handlers.goods_ui import (
     _apple_models,
@@ -41,11 +41,46 @@ from handlers.goods_ui import (
     _samsung_series_text,
     _toggle_models,
 )
-from handlers.helpers import PER_PAGE, is_admin, maybe_refresh_username, safe_edit_message
+from handlers.helpers import (
+    PER_PAGE,
+    is_admin,
+    maybe_refresh_username,
+    require_user_cb,
+    safe_edit_message,
+)
 from logging_setup import log_exception
 
 log = logging.getLogger(__name__)
 router = Router()
+
+
+async def _toggle_catalog_keyword(
+    cb: CallbackQuery,
+    user: dict,
+    chat_id: int,
+    catalog: list[str] | tuple[str, ...],
+    idx: int,
+) -> list[str] | None:
+    """Переключает модель в keywords; None если лимит или неверный индекс."""
+    if idx < 0 or idx >= len(catalog):
+        await cb.answer("Устройство не найдено", show_alert=True)
+        return None
+    selected = [k.strip().lower() for k in (user.get("keywords") or []) if k.strip()]
+    value = catalog[idx].strip().lower()
+    max_kw = _max_keyword_slots(user)
+    if value in selected:
+        selected.remove(value)
+    else:
+        if len(selected) >= max_kw:
+            await cb.answer(
+                "Лимит: 5 моделей для обычного пользователя.",
+                show_alert=True,
+            )
+            return None
+        selected.append(value)
+    user["keywords"] = update_keywords(chat_id, selected)
+    return user["keywords"]
+
 
 @router.callback_query(lambda c: (c.data or "").startswith("bulk:"))
 async def on_bulk_select_callback(cb: CallbackQuery) -> None:
@@ -56,9 +91,8 @@ async def on_bulk_select_callback(cb: CallbackQuery) -> None:
     data = (cb.data or "").strip()
     parts = data.split(":")
     maybe_refresh_username(chat_id, cb.from_user)
-    user = get_user(chat_id)
+    user = await require_user_cb(cb)
     if user is None:
-        await cb.answer("Сначала /start", show_alert=True)
         return
     if not _is_vip_user(user):
         await cb.answer("Только для VIP", show_alert=True)
@@ -105,31 +139,27 @@ async def on_bulk_select_callback(cb: CallbackQuery) -> None:
             return
 
         selected, selected_all = _toggle_models(user, models)
-        update_keywords(chat_id, selected)
-        updated = get_user(chat_id)
-        if updated is None:
-            await cb.answer("Сначала /start", show_alert=True)
-            return
+        user["keywords"] = update_keywords(chat_id, selected)
 
         if data == "bulk:all":
-            markup = _goods_mobile_brands_keyboard(updated)
+            markup = _goods_mobile_brands_keyboard(user)
         elif data == "bulk:apple":
-            markup = _goods_apple_lines_keyboard(updated)
+            markup = _goods_apple_lines_keyboard(user)
         elif data == "bulk:samsung":
-            markup = _goods_samsung_keyboard(updated)
+            markup = _goods_samsung_keyboard(user)
         elif len(parts) == 3 and parts[1] == "ap" and parts[2] in LINE_LABELS:
-            markup = _goods_line_keyboard(updated, parts[2], 0)
+            markup = _goods_line_keyboard(user, parts[2], 0)
         elif len(parts) == 3 and parts[1] == "ss" and parts[2] in SAMSUNG_SERIES_LABELS:
-            markup = _samsung_series_keyboard(parts[2], updated)
+            markup = _samsung_series_keyboard(parts[2], user)
         elif len(parts) == 3 and parts[1] == "sg" and parts[2] in SAMSUNG_LINE_LABELS:
-            markup = _samsung_line_keyboard(updated, parts[2], 0)
+            markup = _samsung_line_keyboard(user, parts[2], 0)
         if markup is None:
             await cb.answer("Нет моделей для выбора", show_alert=True)
             return
 
-        await safe_edit_message(cb, text, reply_markup=markup)
         action = "Выбрано" if selected_all else "Снято"
         await cb.answer(f"{action} моделей: {len(models)}")
+        await safe_edit_message(cb, text, reply_markup=markup)
     except Exception:
         log_exception(log, "bulk error data=%s", data)
         try:
@@ -146,10 +176,8 @@ async def on_goods_callback(cb: CallbackQuery) -> None:
     chat_id = cb.message.chat.id
     data = (cb.data or "").strip()
     maybe_refresh_username(chat_id, cb.from_user)
-    user = get_user(chat_id)
-
+    user = await require_user_cb(cb)
     if user is None:
-        await cb.answer("Сначала /start", show_alert=True)
         return
 
     try:
@@ -227,9 +255,8 @@ async def on_samsung_series_callback(cb: CallbackQuery) -> None:
         return
     chat_id = cb.message.chat.id
     maybe_refresh_username(chat_id, cb.from_user)
-    user = get_user(chat_id)
+    user = await require_user_cb(cb)
     if user is None:
-        await cb.answer("Сначала /start", show_alert=True)
         return
 
     parts = (cb.data or "").strip().split(":")
@@ -264,9 +291,8 @@ async def on_samsung_line_callback(cb: CallbackQuery) -> None:
     arg = int(arg_raw)
 
     maybe_refresh_username(chat_id, cb.from_user)
-    user = get_user(chat_id)
+    user = await require_user_cb(cb)
     if user is None:
-        await cb.answer("Сначала /start", show_alert=True)
         return
 
     models = SAMSUNG_LINES.get(line_slug, ())
@@ -291,29 +317,10 @@ async def on_samsung_line_callback(cb: CallbackQuery) -> None:
 
         if action == "t":
             idx = arg
-            if idx < 0 or idx >= len(models):
-                await cb.answer("Неверная модель", show_alert=True)
-                return
-            value = models[idx].strip().lower()
-            selected = [k.strip().lower() for k in (user.get("keywords") or []) if k.strip()]
-            max_kw = _max_keyword_slots(user)
-            if value in selected:
-                selected.remove(value)
-            else:
-                if len(selected) >= max_kw:
-                    await cb.answer(
-                        "Лимит: 5 моделей для обычного пользователя.",
-                        show_alert=True,
-                    )
-                    return
-                selected.append(value)
-            update_keywords(chat_id, selected)
-            updated = get_user(chat_id)
-            if updated is None:
-                await cb.answer("Сначала /start", show_alert=True)
+            if await _toggle_catalog_keyword(cb, user, chat_id, models, idx) is None:
                 return
             page = idx // GOODS_PER_PAGE
-            kb = _samsung_line_keyboard(updated, line_slug, page)
+            kb = _samsung_line_keyboard(user, line_slug, page)
             if kb is None:
                 await cb.answer()
                 return
@@ -355,9 +362,8 @@ async def on_goods_line_callback(cb: CallbackQuery) -> None:
     arg = int(arg_raw)
 
     maybe_refresh_username(chat_id, cb.from_user)
-    user = get_user(chat_id)
+    user = await require_user_cb(cb)
     if user is None:
-        await cb.answer("Сначала /start", show_alert=True)
         return
 
     models = APPLE_LINES.get(line_slug, ())
@@ -383,29 +389,10 @@ async def on_goods_line_callback(cb: CallbackQuery) -> None:
 
         if action == "t":
             idx = arg
-            if idx < 0 or idx >= len(models):
-                await cb.answer("Неверная модель", show_alert=True)
-                return
-            value = models[idx].strip().lower()
-            selected = [k.strip().lower() for k in (user.get("keywords") or []) if k.strip()]
-            max_kw = _max_keyword_slots(user)
-            if value in selected:
-                selected.remove(value)
-            else:
-                if len(selected) >= max_kw:
-                    await cb.answer(
-                        "Лимит: 5 моделей для обычного пользователя.",
-                        show_alert=True,
-                    )
-                    return
-                selected.append(value)
-            update_keywords(chat_id, selected)
-            updated = get_user(chat_id)
-            if updated is None:
-                await cb.answer("Сначала /start", show_alert=True)
+            if await _toggle_catalog_keyword(cb, user, chat_id, models, idx) is None:
                 return
             page = idx // GOODS_PER_PAGE
-            kb = _goods_line_keyboard(updated, line_slug, page)
+            kb = _goods_line_keyboard(user, line_slug, page)
             if kb is None:
                 await cb.answer()
                 return
@@ -444,9 +431,8 @@ async def on_model_list_callback(cb: CallbackQuery) -> None:
     arg = int(arg_raw)
 
     maybe_refresh_username(chat_id, cb.from_user)
-    user = get_user(chat_id)
+    user = await require_user_cb(cb)
     if user is None:
-        await cb.answer("Сначала /start", show_alert=True)
         return
 
     models = _models_for_scope(scope)
@@ -467,32 +453,13 @@ async def on_model_list_callback(cb: CallbackQuery) -> None:
 
         if action == "t":
             idx = arg
-            if idx < 0 or idx >= len(models):
-                await cb.answer("Устройство не найдено", show_alert=True)
-                return
-            selected = [k.strip().lower() for k in (user.get("keywords") or []) if k.strip()]
-            value = models[idx].strip().lower()
-            max_kw = _max_keyword_slots(user)
-            if value in selected:
-                selected.remove(value)
-            else:
-                if len(selected) >= max_kw:
-                    await cb.answer(
-                        "Лимит: 5 моделей для обычного пользователя.",
-                        show_alert=True,
-                    )
-                    return
-                selected.append(value)
-            update_keywords(chat_id, selected)
-            updated = get_user(chat_id)
-            if updated is None:
-                await cb.answer("Сначала /start", show_alert=True)
+            if await _toggle_catalog_keyword(cb, user, chat_id, models, idx) is None:
                 return
             page = idx // PER_PAGE
             await safe_edit_message(
                 cb,
-                _build_model_list_text(updated, scope),
-                reply_markup=_model_list_keyboard(updated, scope, page=page),
+                _build_model_list_text(user, scope),
+                reply_markup=_model_list_keyboard(user, scope, page=page),
             )
             await cb.answer("Обновлено")
             return
@@ -518,9 +485,8 @@ async def on_keywords_page(cb: CallbackQuery) -> None:
         return
     chat_id = cb.message.chat.id
     maybe_refresh_username(chat_id, cb.from_user)
-    user = get_user(chat_id)
+    user = await require_user_cb(cb)
     if user is None:
-        await cb.answer("Сначала /start", show_alert=True)
         return
     page_raw = (cb.data or "").split(":")[-1]
     page = int(page_raw) if page_raw.isdigit() else 0
@@ -539,9 +505,8 @@ async def on_keywords_toggle(cb: CallbackQuery) -> None:
         return
     chat_id = cb.message.chat.id
     maybe_refresh_username(chat_id, cb.from_user)
-    user = get_user(chat_id)
+    user = await require_user_cb(cb)
     if user is None:
-        await cb.answer("Сначала /start", show_alert=True)
         return
 
     idx_raw = (cb.data or "").split(":")[-1]
@@ -549,34 +514,14 @@ async def on_keywords_toggle(cb: CallbackQuery) -> None:
         await cb.answer("Ошибка выбора", show_alert=True)
         return
     idx = int(idx_raw)
-    if idx < 0 or idx >= len(DEVICE_CATALOG):
-        await cb.answer("Устройство не найдено", show_alert=True)
-        return
-
-    selected = [k.strip().lower() for k in (user.get("keywords") or []) if k.strip()]
-    value = DEVICE_CATALOG[idx].strip().lower()
-    max_kw = _max_keyword_slots(user)
-    if value in selected:
-        selected.remove(value)
-    else:
-        if len(selected) >= max_kw:
-            await cb.answer(
-                "Лимит: 5 моделей для обычного пользователя.",
-                show_alert=True,
-            )
-            return
-        selected.append(value)
-
-    update_keywords(cb.message.chat.id, selected)
-    updated = get_user(cb.message.chat.id)
-    if updated is None:
-        await cb.answer("Сначала /start", show_alert=True)
+    chat_id = cb.message.chat.id
+    if await _toggle_catalog_keyword(cb, user, chat_id, DEVICE_CATALOG, idx) is None:
         return
     page = idx // PER_PAGE
     await safe_edit_message(
         cb,
-        _build_keywords_text(updated),
-        reply_markup=_keywords_keyboard(updated, page=page),
+        _build_keywords_text(user),
+        reply_markup=_keywords_keyboard(user, page=page),
     )
     await cb.answer("Обновлено")
 
@@ -588,11 +533,10 @@ async def on_keywords_done(cb: CallbackQuery) -> None:
         return
     chat_id = cb.message.chat.id
     maybe_refresh_username(chat_id, cb.from_user)
-    user = get_user(chat_id)
-    uid = cb.from_user.id if cb.from_user else 0
+    user = await require_user_cb(cb)
     if user is None:
-        await cb.answer("Сначала /start", show_alert=True)
         return
+    uid = cb.from_user.id if cb.from_user else 0
     selected = user.get("keywords") or []
     await safe_edit_message(
         cb,

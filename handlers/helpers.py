@@ -57,8 +57,16 @@ async def format_user_status_html(bot: Bot, user: dict) -> str:
     return format_status(user)
 
 
-def require_user(chat_id: int) -> dict | None:
-    return get_user(chat_id)
+async def require_user_cb(cb: CallbackQuery) -> dict | None:
+    """Загружает пользователя; при отсутствии отвечает alert и возвращает None."""
+    if cb.message is None:
+        await cb.answer()
+        return None
+    user = get_user(cb.message.chat.id)
+    if user is None:
+        await cb.answer("Сначала /start", show_alert=True)
+        return None
+    return user
 
 
 async def safe_edit_message(

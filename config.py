@@ -56,6 +56,9 @@ def format_price(amount: int | float | None) -> str:
 
 
 MARKET_DISCOUNT_THRESHOLD = float(os.getenv("MARKET_DISCOUNT_THRESHOLD", "0.85"))
+PRICE_DATA_RETENTION_DAYS = max(
+    1, int(os.getenv("PRICE_DATA_RETENTION_DAYS", "14"))
+)
 FILTER_DEBUG_LOG = os.getenv("FILTER_DEBUG_LOG", "").strip().lower() in (
     "1",
     "true",

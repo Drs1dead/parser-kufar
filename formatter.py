@@ -1,13 +1,59 @@
+import re
 from html import escape
 from datetime import datetime, timezone
 
 from config import format_memory_volume, format_price
+
+TELEGRAM_CAPTION_MAX = 1024
+_CAPTION_SAFE_MAX = 980
 
 
 def _esc(value) -> str:
     if value is None:
         return ""
     return escape(str(value))
+
+
+def _format_list_time(raw) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, (int, float)):
+        try:
+            ts = float(raw)
+            if ts > 1e12:
+                ts /= 1000.0
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone()
+            return dt.strftime("%d.%m.%Y %H:%M")
+        except (OSError, OverflowError, ValueError):
+            return ""
+    text = str(raw).strip()
+    if not text:
+        return ""
+    try:
+        normalized = text.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone().strftime("%d.%m.%Y %H:%M")
+    except ValueError:
+        return text[:32]
+
+
+def truncate_ad_caption(text: str, *, max_len: int = _CAPTION_SAFE_MAX) -> str:
+    """Укорачивает HTML-текст под лимит caption Telegram."""
+    if len(text) <= max_len:
+        return text
+    link_match = re.search(
+        r'(\n🔗 <a href="[^"]+">Открыть на Kufar</a>\s*)$',
+        text,
+    )
+    suffix = link_match.group(1) if link_match else ""
+    body = text[: len(text) - len(suffix)] if suffix else text
+    reserve = max_len - len(suffix) - 20
+    if reserve < 80:
+        return text[:max_len]
+    trimmed = body[:reserve].rstrip()
+    return f"{trimmed}\n\n<i>…</i>{suffix}"
 
 
 def format_ad(
@@ -26,8 +72,10 @@ def format_ad(
         price_str = "не указана"
 
     location = _esc(ad.get("location") or "")
+    summary = _esc((ad.get("summary") or "").strip())
     description = _esc(ad.get("description") or "")
     link = ad.get("link") or ""
+    listed = _format_list_time(ad.get("list_time"))
 
     parts: list[str] = []
     if below_market:
@@ -37,8 +85,12 @@ def format_ad(
     parts.append(f"💰 <b>{_esc(price_str)}</b>")
     if market_avg_price is not None:
         parts.append(f"📊 Средняя на Kufar · <b>{format_price(market_avg_price)}</b>")
+    if summary:
+        parts.append(f"📋 {summary}")
     if location:
-        parts.append(f"📍 {_esc(location)}")
+        parts.append(f"📍 {location}")
+    if listed:
+        parts.append(f"🕐 Опубликовано · {listed}")
     if description:
         parts.append("")
         parts.append(description)
