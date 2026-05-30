@@ -16,6 +16,7 @@ from config import (
     MEMORY_VOLUME_OPTIONS,
     PRICE_DATA_RETENTION_DAYS,
     REFERRAL_VIP_DAYS_PER_FRIEND,
+    SEEN_ADS_RETENTION_DAYS,
     SQLITE_BUSY_TIMEOUT,
     SQLITE_SYNCHRONOUS,
     VIP_SUBSCRIPTION_DAYS,
@@ -74,7 +75,8 @@ def _generate_referral_code() -> str:
 
 _USER_SELECT = (
     "chat_id, active, role, vip_until, max_price, keywords, sent_count, created_at, "
-    "vip_feed_mode, username, memory_volumes, referral_code, referred_by"
+    "vip_feed_mode, username, memory_volumes, referral_code, referred_by, "
+    "poll_last_vip, poll_last_regular"
 )
 
 
@@ -93,6 +95,8 @@ def _row_to_user(row: tuple) -> dict:
         "memory_volumes": _parse_memory_csv(row[10] if len(row) > 10 else None),
         "referral_code": (row[11] or "").strip() if len(row) > 11 else "",
         "referred_by": int(row[12]) if len(row) > 12 and row[12] is not None else None,
+        "poll_last_vip": int(row[13] or 0) if len(row) > 13 else 0,
+        "poll_last_regular": int(row[14] or 0) if len(row) > 14 else 0,
     }
 
 
@@ -240,6 +244,7 @@ def init_db() -> None:
         );
 
         CREATE INDEX IF NOT EXISTS idx_seen_chat ON seen_ads(chat_id);
+        CREATE INDEX IF NOT EXISTS idx_seen_seen_at ON seen_ads(seen_at);
         CREATE INDEX IF NOT EXISTS idx_sent_prices_lookup ON sent_prices(chat_id, device_key);
         CREATE INDEX IF NOT EXISTS idx_market_prices_device ON market_prices(device_key);
         CREATE INDEX IF NOT EXISTS idx_market_prices_sent_at ON market_prices(sent_at);
@@ -267,6 +272,15 @@ def init_db() -> None:
         _execute("ALTER TABLE users ADD COLUMN referral_code TEXT NOT NULL DEFAULT ''")
     if "referred_by" not in cols:
         _execute("ALTER TABLE users ADD COLUMN referred_by INTEGER")
+    cols = _table_columns("users")
+    if "poll_last_vip" not in cols:
+        _execute(
+            "ALTER TABLE users ADD COLUMN poll_last_vip INTEGER NOT NULL DEFAULT 0"
+        )
+    if "poll_last_regular" not in cols:
+        _execute(
+            "ALTER TABLE users ADD COLUMN poll_last_regular INTEGER NOT NULL DEFAULT 0"
+        )
     _executescript(
         """
         CREATE TABLE IF NOT EXISTS referrals (
@@ -293,6 +307,13 @@ def init_db() -> None:
             deleted[0],
             deleted[1],
             PRICE_DATA_RETENTION_DAYS,
+        )
+    seen_deleted = prune_seen_ads()
+    if seen_deleted:
+        log.info(
+            "seen_ads pruned on init deleted=%s retention_days=%s",
+            seen_deleted,
+            SEEN_ADS_RETENTION_DAYS,
         )
 
 
@@ -551,6 +572,28 @@ def mark_seen(chat_id: int, link: str) -> None:
     )
 
 
+def prune_seen_ads(retention_days: int | None = None) -> int:
+    """Удаляет просмотренные объявления старше retention_days."""
+    days = retention_days if retention_days is not None else SEEN_ADS_RETENTION_DAYS
+    cutoff = int(time.time()) - max(1, int(days)) * 86400
+    cur = _execute("DELETE FROM seen_ads WHERE seen_at < ?", (cutoff,))
+    return cur.rowcount if cur.rowcount is not None else 0
+
+
+def set_poll_last_run(chat_id: int, *, is_vip: bool) -> None:
+    now = int(time.time())
+    if is_vip:
+        _execute(
+            "UPDATE users SET poll_last_vip = ? WHERE chat_id = ?",
+            (now, chat_id),
+        )
+    else:
+        _execute(
+            "UPDATE users SET poll_last_regular = ? WHERE chat_id = ?",
+            (now, chat_id),
+        )
+
+
 def count_seen(chat_id: int) -> int:
     cur = _execute("SELECT COUNT(*) FROM seen_ads WHERE chat_id = ?", (chat_id,))
     return int(cur.fetchone()[0])
@@ -600,7 +643,7 @@ def avg_market_price(device_key: str) -> int | None:
 
 
 def update_vip_feed_mode(chat_id: int, mode: str) -> None:
-    if mode not in ("normal", "below_market", "exchange"):
+    if mode not in ("normal", "below_market", "exchange", "ideal"):
         return
     _execute(
         "UPDATE users SET vip_feed_mode = ? WHERE chat_id = ? AND role = 'vip'",

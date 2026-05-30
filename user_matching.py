@@ -9,6 +9,8 @@ from filters import (
     ad_device_key,
     exchange_reject_reason,
     filter_reject_reason,
+    ideal_passes,
+    ideal_reject_reason,
     log_filter_reject,
     matches_filters,
 )
@@ -17,15 +19,21 @@ from filters import (
 VIP_SPECIAL_MAX_PRICE = 99_999_999
 
 
-def _passes_base(ad: dict, user: dict, *, max_price: int) -> bool:
+def _smart_filtering_for(user: dict) -> bool:
+    """Жёсткий отбор (целый телефон, не продажа, «новый» и т.д.) — только для VIP."""
+    return user.get("role") == "vip"
+
+
+def _passes_base(ad: dict, user: dict, *, max_price: int, skip_new_phone: bool = False) -> bool:
     return matches_filters(
         ad,
         max_price,
         user["keywords"],
         memory_volumes=user.get("memory_volumes"),
-        smart_filtering=True,
+        smart_filtering=_smart_filtering_for(user),
         device_filter=True,
         memory_filter=True,
+        skip_new_phone=skip_new_phone,
     )
 
 
@@ -37,7 +45,7 @@ def _log_reject(ad: dict, user: dict, *, max_price: int, feed_mode: str) -> None
         max_price,
         user["keywords"],
         memory_volumes=user.get("memory_volumes"),
-        smart_filtering=True,
+        smart_filtering=_smart_filtering_for(user),
         device_filter=True,
         memory_filter=True,
     )
@@ -62,8 +70,11 @@ def _match_vip_ads(
     accept: Callable[[dict, dict, dict[str, int | None]], bool],
 ) -> list[dict]:
     matched: list[dict] = []
+    skip_new = feed_mode == "ideal"
     for ad in ads:
-        if not _passes_base(ad, user, max_price=VIP_SPECIAL_MAX_PRICE):
+        if not _passes_base(
+            ad, user, max_price=VIP_SPECIAL_MAX_PRICE, skip_new_phone=skip_new
+        ):
             _log_reject(ad, user, max_price=VIP_SPECIAL_MAX_PRICE, feed_mode=feed_mode)
             continue
         if accept(ad, user, market_cache):
@@ -78,6 +89,21 @@ def _below_market_accept(ad: dict, user: dict, market_cache: dict[str, int | Non
         return False
     mavg = _market_avg(dk, market_cache)
     return bool(mavg and price < int(mavg * MARKET_DISCOUNT_THRESHOLD))
+
+
+def _ideal_pre_accept(ad: dict, user: dict, market_cache: dict[str, int | None]) -> bool:
+    del market_cache
+    if not ideal_passes(ad, stage="pre"):
+        reason = ideal_reject_reason(ad, require_full_text=False)
+        if reason:
+            log_filter_reject(
+                ad,
+                reason,
+                chat_id=user["chat_id"],
+                feed_mode="ideal",
+            )
+        return False
+    return True
 
 
 def _exchange_accept(ad: dict, user: dict, market_cache: dict[str, int | None]) -> bool:
@@ -118,6 +144,15 @@ def match_ads_for_user(
             market_cache,
             feed_mode,
             accept=_exchange_accept,
+        )
+
+    if is_vip and feed_mode == "ideal":
+        return _match_vip_ads(
+            user,
+            ads,
+            market_cache,
+            feed_mode,
+            accept=_ideal_pre_accept,
         )
 
     max_price = int(user.get("max_price") or 0)

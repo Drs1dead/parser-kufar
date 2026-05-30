@@ -169,15 +169,17 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
             )
             return
 
-        if data in ("nav:vipf:bm", "nav:vipf:ex"):
+        if data in ("nav:vipf:bm", "nav:vipf:ex", "nav:vipf:ideal"):
             if user.get("role") != "vip":
                 await cb.answer("Только для VIP", show_alert=True)
                 return
             cur = user.get("vip_feed_mode") or "normal"
             if data == "nav:vipf:bm":
                 new_mode = "normal" if cur == "below_market" else "below_market"
-            else:
+            elif data == "nav:vipf:ex":
                 new_mode = "normal" if cur == "exchange" else "exchange"
+            else:
+                new_mode = "normal" if cur == "ideal" else "ideal"
             update_vip_feed_mode(chat_id, new_mode)
             user["vip_feed_mode"] = new_mode
             await safe_edit_message(
@@ -191,7 +193,11 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
                 else (
                     "🔄 Поток «обмен»"
                     if new_mode == "exchange"
-                    else "📬 Обычная рассылка"
+                    else (
+                        "✨ Поток «идеальные (бета)»"
+                        if new_mode == "ideal"
+                        else "📬 Обычная рассылка"
+                    )
                 )
             )
             await cb.answer(hint)

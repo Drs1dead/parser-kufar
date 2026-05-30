@@ -28,8 +28,19 @@ handlers/
 ## Поток рассылки
 
 1. `poller` один раз загружает объявления с Kufar.
-2. Для каждого активного пользователя — `match_ads_for_user` (с кэшем средних цен на цикл).
+2. Для каждого активного пользователя — `match_ads_for_user` (с кэшем средних цен на цикл). `smart_filtering` (жёсткие правила в `filters.py`) включён только если `role == vip`.
 3. Новые объявления отправляются в Telegram (`formatter.format_ad`).
+
+### VIP-потоки (`users.vip_feed_mode`)
+
+| Режим | Где фильтруется |
+|-------|-----------------|
+| `normal` | Базовые фильтры + модели/память |
+| `below_market` | + цена ниже средней |
+| `exchange` | + `is_exchange_ad` |
+| `ideal` | pre: `ideal_passes(stage=pre)` в `user_matching`; strict: enrich описаний → `ideal_passes(stage=strict)` в `poller`; отклонённые strict помечаются `seen` |
+
+Правила «Идеальные» — `filters.py` (`IDEAL_*`, `parse_battery_percents`); состояние из `condition_label` в `kufar_fetch.normalize_listing`.
 
 ## Поток кнопок
 
@@ -50,7 +61,7 @@ handlers/
 
 ## Скорость
 
-- Один fetch Kufar на цикл, не на пользователя.
+- Один fetch Kufar на цикл, не на пользователя; до `KUFAR_MAX_PAGES` страниц на запрос (cursor).
 - Разные интервалы опроса для VIP и обычных аккаунтов.
 - Кэш `market_prices` в памяти на один проход poller; в БД — только цены за `PRICE_DATA_RETENTION_DAYS` (по умолчанию 14), старые строки prune при старте и в poller.
 - Минимум лишних запросов к БД в хендлерах (один `get_user` после обновления username).

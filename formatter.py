@@ -57,7 +57,11 @@ def truncate_ad_caption(text: str, *, max_len: int = _CAPTION_SAFE_MAX) -> str:
 
 
 def format_ad(
-    ad: dict, *, market_avg_price: int | None = None, below_market: bool = False
+    ad: dict,
+    *,
+    market_avg_price: int | None = None,
+    below_market: bool = False,
+    ideal_feed: bool = False,
 ) -> str:
     """Превращает словарь объявления в HTML-сообщение для Telegram."""
     title = _esc(ad.get("title") or "Без названия")
@@ -78,7 +82,10 @@ def format_ad(
     listed = _format_list_time(ad.get("list_time"))
 
     parts: list[str] = []
-    if below_market:
+    if ideal_feed:
+        parts.append("✨ <b>Идеальные (бета)</b>")
+        parts.append("")
+    elif below_market:
         parts.append("🔥 <b>Ниже рыночной цены</b>")
         parts.append("")
     parts.append(f"📱 <b>{title}</b>")
@@ -122,6 +129,8 @@ def format_status(user: dict) -> str:
             vip_feed = "\n🔥 <b>Поток:</b> ниже рынка"
         elif mode == "exchange":
             vip_feed = "\n🔄 <b>Поток:</b> только обмен"
+        elif mode == "ideal":
+            vip_feed = "\n✨ <b>Поток:</b> идеальные (бета)"
 
     paused = ""
     if not user.get("active"):

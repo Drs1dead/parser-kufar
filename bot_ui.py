@@ -160,6 +160,8 @@ def home_text(user: dict | None, *, is_new: bool) -> str:
             lines += ["", "🔥 Доп. поток · <b>ниже рынка</b>"]
         elif mode == "exchange":
             lines += ["", "🔄 Доп. поток · <b>только обмен</b>"]
+        elif mode == "ideal":
+            lines += ["", "✨ Доп. поток · <b>идеальные (бета)</b>"]
         else:
             lines += ["", "⭐ VIP активен — настройки во вкладке <b>VIP</b>"]
     elif not is_new:
@@ -214,6 +216,12 @@ def vip_text(user: dict | None) -> str:
             lines.append("🔥 Поток · ниже рынка")
         elif mode == "exchange":
             lines.append("🔄 Поток · только обмен")
+        elif mode == "ideal":
+            lines.append("✨ Поток · идеальные (бета)")
+            lines.append(
+                "<i>Только «Отличное»/«Хорошее», явный АКБ ≥ 75%, без поломок и замен. "
+                "Нет данных — лот не приходит. Бета.</i>"
+            )
         else:
             lines.append("📬 Поток · обычная рассылка")
         lines.append("")
@@ -221,7 +229,7 @@ def vip_text(user: dict | None) -> str:
     else:
         lines += [
             "",
-            "📱 без лимита моделей · 🔥 ниже рынка · 🔄 обмен",
+            "📱 без лимита моделей · 🔍 жёсткие фильтры · 🔥 ниже рынка · 🔄 обмен · ✨ идеальные",
             f"💳 <b>{VIP_PRICE_USD}$</b> / 30 дн. · @manohio",
             "",
             "<i>Есть промокод — кнопка ниже.</i>",
@@ -245,11 +253,15 @@ def vip_keyboard(user: dict | None) -> InlineKeyboardMarkup:
         mode = user.get("vip_feed_mode") or "normal"
         bm = "🔥 Ниже рынка ✅" if mode == "below_market" else "🔥 Ниже рынка"
         ex = "🔄 Обмен ✅" if mode == "exchange" else "🔄 Обмен"
+        idl = "✨ Идеальные (бета) ✅" if mode == "ideal" else "✨ Идеальные (бета)"
         rows.append(
             [
                 InlineKeyboardButton(text=bm, callback_data="nav:vipf:bm"),
                 InlineKeyboardButton(text=ex, callback_data="nav:vipf:ex"),
             ]
+        )
+        rows.append(
+            [InlineKeyboardButton(text=idl, callback_data="nav:vipf:ideal")]
         )
     rows.append([InlineKeyboardButton(text="🎟 Промокод", callback_data="nav:promo")])
     rows.append(back_row())

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from aiogram import Bot
 from aiogram.enums import ParseMode
@@ -29,11 +30,14 @@ from db import (
     increment_sent,
     mark_seen,
     prune_price_tables,
+    prune_seen_ads,
     save_market_price,
     seen_links_for,
     set_active,
+    set_poll_last_run,
 )
 from filters import ad_device_key, is_whole_phone_listing, matches_filters
+from filters import ideal_passes
 from formatter import format_ad, truncate_ad_caption
 from kufar_fetch import enrich_ads_descriptions, fetch_ads
 from logging_setup import log_exception
@@ -41,7 +45,6 @@ from user_matching import VIP_SPECIAL_MAX_PRICE, match_ads_for_user
 
 log = logging.getLogger("kufar_bot.poller")
 
-last_run_at: dict[int, float] = {}
 first_run_notified: set[int] = set()
 
 VIP_EXPIRED_MSG = (
@@ -79,21 +82,15 @@ def _ingest_market_prices_from_ads(ads: list[dict]) -> None:
         save_market_price(link, dk, price)
 
 
-def _needs_descriptions(users: list[dict]) -> bool:
-    return any(
-        u.get("role") == "vip" and (u.get("vip_feed_mode") or "normal") == "exchange"
-        for u in users
-    )
-
-
 def _should_process_user(user: dict) -> bool:
-    chat_id = user["chat_id"]
-    now = asyncio.get_running_loop().time()
-    prev = last_run_at.get(chat_id)
-    if prev is None:
+    is_vip = user.get("role") == "vip"
+    prev = int(user.get("poll_last_vip") or 0) if is_vip else int(
+        user.get("poll_last_regular") or 0
+    )
+    if prev <= 0:
         return True
-    interval = VIP_CHECK_INTERVAL if user.get("role") == "vip" else REGULAR_CHECK_INTERVAL
-    return (now - prev) >= interval
+    interval = VIP_CHECK_INTERVAL if is_vip else REGULAR_CHECK_INTERVAL
+    return (time.time() - prev) >= interval
 
 
 async def _notify_vip_expired(bot: Bot, chat_ids: list[int]) -> None:
@@ -114,9 +111,15 @@ async def _send_ad(
     *,
     market_avg_price: int | None = None,
     below_market: bool = False,
+    ideal_feed: bool = False,
 ) -> bool:
     text = truncate_ad_caption(
-        format_ad(ad, market_avg_price=market_avg_price, below_market=below_market)
+        format_ad(
+            ad,
+            market_avg_price=market_avg_price,
+            below_market=below_market,
+            ideal_feed=ideal_feed,
+        )
     )
     photos = [p for p in (ad.get("photo_urls") or []) if isinstance(p, str) and p.strip()]
 
@@ -196,16 +199,32 @@ async def _process_user(
     else:
         to_send = matched
 
+    ideal_mode = is_vip and feed_mode == "ideal"
+    if ideal_mode and to_send:
+        await enrich_ads_descriptions(to_send)
+        strict_ok: list[dict] = []
+        for ad in to_send:
+            if ideal_passes(ad, stage="strict"):
+                strict_ok.append(ad)
+            else:
+                link = ad.get("link")
+                if link:
+                    mark_seen(chat_id, link)
+        to_send = strict_ok
+        if not to_send:
+            return
+
     links = [ad["link"] for ad in to_send if ad.get("link")]
     already_seen = seen_links_for(chat_id, links)
 
-    need_desc = [
-        ad
-        for ad in to_send
-        if not (ad.get("description") or "").strip() and ad.get("link")
-    ]
-    if need_desc:
-        await enrich_ads_descriptions(need_desc)
+    if not ideal_mode:
+        need_desc = [
+            ad
+            for ad in to_send
+            if not (ad.get("description") or "").strip() and ad.get("link")
+        ]
+        if need_desc:
+            await enrich_ads_descriptions(need_desc)
 
     for ad in to_send:
         link = ad.get("link")
@@ -223,6 +242,7 @@ async def _process_user(
         if (
             is_vip
             and not below_market
+            and feed_mode != "ideal"
             and market_avg
             and isinstance(price, int)
             and price < int(market_avg * MARKET_DISCOUNT_THRESHOLD)
@@ -235,6 +255,7 @@ async def _process_user(
             ad,
             market_avg_price=market_avg if is_vip else None,
             below_market=below_market,
+            ideal_feed=ideal_mode,
         )
         if ok:
             mark_seen(chat_id, link)
@@ -281,11 +302,14 @@ async def poller(bot: Bot) -> None:
                 log.debug(
                     "price tables pruned market=%s sent=%s", pruned[0], pruned[1]
                 )
+            seen_pruned = await asyncio.to_thread(prune_seen_ads)
+            if seen_pruned:
+                log.debug("seen_ads pruned deleted=%s", seen_pruned)
             users = await asyncio.to_thread(get_active_users, expire_vip=False)
             if not users:
                 log.debug("poll skip — no active subscribers")
             else:
-                ads = await fetch_ads(with_description=_needs_descriptions(users))
+                ads = await fetch_ads(with_description=False)
                 await asyncio.to_thread(_ingest_market_prices_from_ads, ads)
                 market_cache: dict[str, int | None] = {}
                 log.debug("poll fetched ads=%d subscribers=%d", len(ads), len(users))
@@ -295,7 +319,11 @@ async def poller(bot: Bot) -> None:
                         if not _should_process_user(user):
                             continue
                         await _process_user(bot, user, ads, market_cache)
-                        last_run_at[user["chat_id"]] = asyncio.get_running_loop().time()
+                        await asyncio.to_thread(
+                            set_poll_last_run,
+                            user["chat_id"],
+                            is_vip=user.get("role") == "vip",
+                        )
                     except Exception:
                         log_exception(log, "poll user failed chat_id=%s", user["chat_id"])
         except Exception:

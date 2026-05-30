@@ -8,6 +8,8 @@ from config import (
     DEFAULT_EXCLUDE_TERMS,
     DEFAULT_MEMORY_VOLUMES,
     FILTER_DEBUG_LOG,
+    IDEAL_ALLOWED_CONDITIONS,
+    IDEAL_MIN_BATTERY_PERCENT,
     MEMORY_TIER_512_PLUS_GB,
     MEMORY_VOLUME_OPTIONS,
     NOT_SALE_TERMS,
@@ -96,6 +98,95 @@ REJECT_EXCHANGE_NEGATIVE = "exchange_negative"
 REJECT_EXCHANGE_NO_HINT = "exchange_no_positive_hint"
 REJECT_NOT_WHOLE_PHONE = "not_whole_phone"
 REJECT_MEMORY_NOT_SELECTED = "memory_not_selected"
+REJECT_IDEAL_NO_CONDITION = "ideal_no_condition"
+REJECT_IDEAL_BAD_CONDITION = "ideal_bad_condition"
+REJECT_IDEAL_BATTERY_UNKNOWN = "ideal_battery_unknown"
+REJECT_IDEAL_BATTERY_LOW = "ideal_battery_low"
+REJECT_IDEAL_DEFECT_TERM = "ideal_defect_term"
+REJECT_IDEAL_NO_DESCRIPTION = "ideal_no_description"
+REJECT_IDEAL_EXCHANGE = "ideal_exchange"
+
+# VIP «Идеальные»: без царапин/потёртостей в списке.
+IDEAL_REJECT_TERMS: tuple[str, ...] = (
+    "разбит",
+    "разбитый",
+    "трещин",
+    "скол",
+    "сколот",
+    "погнут",
+    "не включается",
+    "не включ",
+    "не работает",
+    "не заряжа",
+    "битый экран",
+    "битый дисплей",
+    "разбитый экран",
+    "разбитый дисплей",
+    "face id не",
+    "faceid не",
+    "touch не работ",
+    "тач не работ",
+    "вертикальные полос",
+    "пятно на экран",
+    "битые пиксел",
+    "битый пиксел",
+    "подсветк",
+    "ghosting",
+    "слабая батар",
+    "слабый акб",
+    "пухлая батар",
+    "вздут",
+    "держит 2 час",
+    "держит час",
+    "быстро садится",
+    "разряжается",
+    "менял дисплей",
+    "менял экран",
+    "заменен дисплей",
+    "заменён дисплей",
+    "заменен экран",
+    "заменён экран",
+    "замена диспле",
+    "замена экран",
+    "не оригинал",
+    "китайский дисплей",
+    "китайский экран",
+    "aftermarket",
+    "рефка",
+    "refurb",
+    "на запчаст",
+    "для запчаст",
+    "донор",
+    "icloud",
+    "айклауд",
+    "заблокирован",
+    "заблокир",
+    "на обмен",
+    "к обмену",
+    "только обмен",
+    "меняю на",
+    "обмен на",
+)
+
+IDEAL_HEADLINE_REJECT_TERMS: tuple[str, ...] = (
+    "разбит",
+    "трещин",
+    "не включается",
+    "битый экран",
+    "icloud",
+    "заблокирован",
+    "на запчаст",
+    "донор",
+)
+
+_BATTERY_PERCENT_RE = re.compile(
+    r"(?:"
+    r"(?:акб|аккумулятор|батаре|battery|ёмкост|емкост|health|здоровь)[^\d]{0,24}(\d{2,3})\s*%?"
+    r"|(\d{2,3})\s*%\s*(?:акб|аккумулятор|батаре|battery|ёмкост|емкост|health)"
+    r"|(?:акб|аккумулятор|батаре|battery)\s*(\d{2,3})\b"
+    r")",
+    re.IGNORECASE,
+)
 
 
 def normalize(text: str) -> str:
@@ -305,6 +396,7 @@ def filter_reject_reason(
     smart_filtering: bool,
     device_filter: bool = True,
     memory_filter: bool = True,
+    skip_new_phone: bool = False,
 ) -> str | None:
     """
     None — объявление проходит фильтры.
@@ -332,7 +424,7 @@ def filter_reject_reason(
             return REJECT_NOT_PHONE
         if any(_contains_not_sale_term(headline, t) for t in NOT_SALE_TERMS):
             return REJECT_NOT_SALE
-        if is_new_phone_ad(ad):
+        if not skip_new_phone and is_new_phone_ad(ad):
             return REJECT_NEW_PHONE
 
     if device_filter:
@@ -369,6 +461,7 @@ def matches_filters(
     smart_filtering: bool,
     device_filter: bool = True,
     memory_filter: bool = True,
+    skip_new_phone: bool = False,
 ) -> bool:
     """
     Цена — по объявлению целиком.
@@ -385,9 +478,97 @@ def matches_filters(
             smart_filtering=smart_filtering,
             device_filter=device_filter,
             memory_filter=memory_filter,
+            skip_new_phone=skip_new_phone,
         )
         is None
     )
+
+
+def parse_battery_percents(text: str) -> list[int]:
+    """Извлекает явные проценты ёмкости АКБ из текста объявления."""
+    t = normalize(text or "")
+    found: list[int] = []
+    for m in _BATTERY_PERCENT_RE.finditer(t):
+        for g in m.groups():
+            if g is None:
+                continue
+            value = int(g)
+            if 1 <= value <= 100:
+                found.append(value)
+    return found
+
+
+def _ideal_condition_label(ad: dict) -> str:
+    raw = (ad.get("condition_label") or "").strip()
+    if raw:
+        return normalize(raw)
+    summary = normalize(ad.get("summary") or "")
+    m = re.search(r"состояние:\s*([^·]+)", summary)
+    if m:
+        return normalize(m.group(1).strip())
+    return ""
+
+
+def _ideal_condition_ok(ad: dict) -> str | None:
+    label = _ideal_condition_label(ad)
+    if not label:
+        return REJECT_IDEAL_NO_CONDITION
+    allowed = {normalize(c) for c in IDEAL_ALLOWED_CONDITIONS}
+    if label not in allowed:
+        return REJECT_IDEAL_BAD_CONDITION
+    return None
+
+
+def _ideal_text_has_term(text: str, terms: tuple[str, ...]) -> str | None:
+    t = normalize(text or "")
+    if not t:
+        return None
+    for term in terms:
+        if _contains_phrase(t, term):
+            return term
+    return None
+
+
+def ideal_reject_reason(ad: dict, *, require_full_text: bool) -> str | None:
+    """
+    None — лот подходит под поток «Идеальные» на данной стадии.
+    require_full_text=False: состояние + заголовок; True: + описание, АКБ, полный текст.
+    """
+    cond_err = _ideal_condition_ok(ad)
+    if cond_err:
+        return cond_err
+
+    headline = ad_headline(ad)
+    hit = _ideal_text_has_term(headline, IDEAL_HEADLINE_REJECT_TERMS)
+    if hit:
+        return REJECT_IDEAL_DEFECT_TERM
+
+    if is_exchange_ad(ad):
+        return REJECT_IDEAL_EXCHANGE
+
+    if not require_full_text:
+        return None
+
+    description = normalize(ad.get("description") or "")
+    if not description.strip():
+        return REJECT_IDEAL_NO_DESCRIPTION
+
+    full_text = ad_full_text(ad)
+    hit = _ideal_text_has_term(full_text, IDEAL_REJECT_TERMS)
+    if hit:
+        return REJECT_IDEAL_DEFECT_TERM
+
+    percents = parse_battery_percents(full_text)
+    if not percents:
+        return REJECT_IDEAL_BATTERY_UNKNOWN
+    if any(p < IDEAL_MIN_BATTERY_PERCENT for p in percents):
+        return REJECT_IDEAL_BATTERY_LOW
+    return None
+
+
+def ideal_passes(ad: dict, *, stage: str) -> bool:
+    require_full = stage == "strict"
+    return ideal_reject_reason(ad, require_full_text=require_full) is None
 
 
 def log_filter_reject(

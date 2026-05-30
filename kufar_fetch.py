@@ -11,6 +11,7 @@ import aiohttp
 from config import (
     KUFAR_FETCH_RETRIES,
     KUFAR_FETCH_RETRY_DELAY,
+    KUFAR_MAX_PAGES,
     KUFAR_QUERIES,
     KUFAR_REGION,
     KUFAR_SIZE,
@@ -111,6 +112,7 @@ def normalize_listing(raw: dict) -> Optional[dict]:
     phone_model = _param_label(ad_params, "phone_model").strip()
     phone_memory = _param_label(ad_params, "phone_memory").strip()
     summary = _build_summary(ad_params)
+    condition_label = _param_label(ad_params, "condition").strip()
     memory_gb = parse_memory_gb_text(phone_memory) or parse_memory_gb_text(summary)
     return {
         "ad_id": ad_id,
@@ -119,6 +121,7 @@ def normalize_listing(raw: dict) -> Optional[dict]:
         "price_usd": _price_from_cents(raw.get("price_usd")),
         "location": _build_location(ad_params),
         "summary": summary,
+        "condition_label": condition_label,
         "phone_model": phone_model,
         "phone_memory": phone_memory,
         "memory_gb": memory_gb,
@@ -129,7 +132,23 @@ def normalize_listing(raw: dict) -> Optional[dict]:
     }
 
 
-async def _fetch_search(session: aiohttp.ClientSession, query: str) -> list[dict]:
+def _next_page_cursor(data: dict) -> str | None:
+    pages = (data.get("pagination") or {}).get("pages") or []
+    for page in pages:
+        if page.get("label") == "next":
+            token = page.get("token")
+            if isinstance(token, str) and token.strip():
+                return token.strip()
+    return None
+
+
+async def _fetch_search_page(
+    session: aiohttp.ClientSession,
+    query: str,
+    *,
+    cursor: str | None = None,
+) -> tuple[list[dict], str | None]:
+    """Одна страница листинга: объявления и cursor следующей страницы."""
     params = {
         "lang": "ru",
         "size": str(KUFAR_SIZE),
@@ -138,6 +157,8 @@ async def _fetch_search(session: aiohttp.ClientSession, query: str) -> list[dict
         "cur": "BYR",
         "query": query,
     }
+    if cursor:
+        params["cursor"] = cursor
     last_err: str | None = None
     for attempt in range(1, KUFAR_FETCH_RETRIES + 1):
         try:
@@ -154,16 +175,23 @@ async def _fetch_search(session: aiohttp.ClientSession, query: str) -> list[dict
                         attempt,
                         KUFAR_FETCH_RETRIES,
                     )
+                    if r.status == 429 and attempt < KUFAR_FETCH_RETRIES:
+                        retry_after = r.headers.get("Retry-After")
+                        if retry_after:
+                            try:
+                                await asyncio.sleep(float(retry_after))
+                            except ValueError:
+                                pass
                 elif r.status != 200:
                     log.error(
                         "kufar search failed query=%r status=%s",
                         query,
                         r.status,
                     )
-                    return []
+                    return [], None
                 else:
                     data = await r.json()
-                    return data.get("ads") or []
+                    return data.get("ads") or [], _next_page_cursor(data)
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             last_err = repr(e)
             log.warning(
@@ -182,7 +210,30 @@ async def _fetch_search(session: aiohttp.ClientSession, query: str) -> list[dict
             KUFAR_FETCH_RETRIES,
             last_err,
         )
-    return []
+    return [], None
+
+
+async def _fetch_search(session: aiohttp.ClientSession, query: str) -> list[dict]:
+    """До KUFAR_MAX_PAGES страниц листинга по одному поисковому запросу."""
+    all_raw: list[dict] = []
+    cursor: str | None = None
+    for page_num in range(1, KUFAR_MAX_PAGES + 1):
+        batch, next_cursor = await _fetch_search_page(
+            session, query, cursor=cursor
+        )
+        if batch:
+            all_raw.extend(batch)
+        if not next_cursor or page_num >= KUFAR_MAX_PAGES:
+            break
+        cursor = next_cursor
+    if KUFAR_MAX_PAGES > 1 and len(all_raw) > KUFAR_SIZE:
+        log.debug(
+            "kufar paginated query=%r pages=%s raw=%d",
+            query,
+            page_num,
+            len(all_raw),
+        )
+    return all_raw
 
 
 async def _fetch_description(session: aiohttp.ClientSession, link: str) -> str:
@@ -276,8 +327,12 @@ async def fetch_ads(*, with_description: bool = True) -> list[dict]:
                 ads.append(item)
 
         if with_description and ads:
-            sem = asyncio.Semaphore(5)
-            await asyncio.gather(*(_enrich_description(session, ad, sem) for ad in ads))
+            await enrich_ads_descriptions(ads)
 
-    log.debug("kufar listings raw=%d normalized=%d", len(raw_ads), len(ads))
+    log.debug(
+        "kufar listings raw=%d normalized=%d pages_per_query=%s",
+        len(raw_ads),
+        len(ads),
+        KUFAR_MAX_PAGES,
+    )
     return ads

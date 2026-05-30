@@ -59,6 +59,14 @@ MARKET_DISCOUNT_THRESHOLD = float(os.getenv("MARKET_DISCOUNT_THRESHOLD", "0.85")
 PRICE_DATA_RETENTION_DAYS = max(
     1, int(os.getenv("PRICE_DATA_RETENTION_DAYS", "14"))
 )
+SEEN_ADS_RETENTION_DAYS = max(1, int(os.getenv("SEEN_ADS_RETENTION_DAYS", "90")))
+KUFAR_MAX_PAGES = max(1, int(os.getenv("KUFAR_MAX_PAGES", "2")))
+IDEAL_MIN_BATTERY_PERCENT = max(1, min(100, int(os.getenv("IDEAL_MIN_BATTERY_PERCENT", "75"))))
+IDEAL_ALLOWED_CONDITIONS: tuple[str, ...] = tuple(
+    normalize_label
+    for raw in os.getenv("IDEAL_ALLOWED_CONDITIONS", "Отличное,Хорошее").split(",")
+    if (normalize_label := raw.strip().lower().replace("ё", "е"))
+) or ("отличное", "хорошее")
 FILTER_DEBUG_LOG = os.getenv("FILTER_DEBUG_LOG", "").strip().lower() in (
     "1",
     "true",

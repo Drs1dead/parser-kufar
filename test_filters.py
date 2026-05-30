@@ -95,6 +95,38 @@ class ExchangeAdTests(unittest.TestCase):
 
 
 class SmartFilterTests(unittest.TestCase):
+    def test_strict_filtering_off_allows_junk_without_device_reject(self) -> None:
+        """Обычный аккаунт: без smart_filtering коробка не режется по not_whole_phone."""
+        ad = _ad(
+            title="Коробка от телефона Apple iPhone 11",
+            summary="Смартфон",
+        )
+        self.assertIsNone(
+            filter_reject_reason(
+                ad,
+                1000,
+                ["iphone 11"],
+                smart_filtering=False,
+                device_filter=True,
+            )
+        )
+
+    def test_strict_filtering_on_rejects_box(self) -> None:
+        ad = _ad(
+            title="Коробка от телефона Apple iPhone 11",
+            summary="Смартфон",
+        )
+        self.assertEqual(
+            filter_reject_reason(
+                ad,
+                1000,
+                ["iphone 11"],
+                smart_filtering=True,
+                device_filter=True,
+            ),
+            REJECT_NOT_WHOLE_PHONE,
+        )
+
     def test_accessory_in_title_rejected(self) -> None:
         ad = _ad(title="чехол для iphone 11", summary="Смартфон")
         self.assertFalse(is_whole_phone_listing(ad))
