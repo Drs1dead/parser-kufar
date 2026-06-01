@@ -1,6 +1,5 @@
 """Тексты и клавиатуры бота — отдельно от обработчиков."""
 import time
-from datetime import datetime, timezone
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -12,6 +11,7 @@ from config import (
     REGULAR_CHECK_INTERVAL,
     VIP_CHECK_INTERVAL,
     VIP_PRICE_USD,
+    format_local_datetime,
     format_memory_volume,
     format_price,
 )
@@ -59,8 +59,7 @@ def _vip_status_lines(user: dict | None) -> list[str]:
     now = int(time.time())
     vip_until = int(user.get("vip_until") or 0)
     if user.get("role") == "vip" and vip_until > now:
-        dt = datetime.fromtimestamp(vip_until, tz=timezone.utc).astimezone()
-        until = dt.strftime("%d.%m.%Y в %H:%M")
+        until = format_local_datetime(vip_until, fmt="%d.%m.%Y в %H:%M")
         return [
             "👤 <b>Аккаунт:</b> VIP ⭐",
             f"📅 <b>Активен до:</b> {until}",

@@ -1,8 +1,23 @@
 import os
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Часовой пояс для дат в сообщениях (Минск = UTC+3, как МСК).
+_display_tz_name = os.getenv("DISPLAY_TIMEZONE", "Europe/Minsk").strip() or "Europe/Minsk"
+try:
+    DISPLAY_TZ = ZoneInfo(_display_tz_name)
+except Exception:
+    DISPLAY_TZ = ZoneInfo("Europe/Minsk")
+
+
+def format_local_datetime(ts: int | float, *, fmt: str = "%d.%m.%Y %H:%M") -> str:
+    """Момент времени (Unix UTC) → строка в DISPLAY_TZ."""
+    dt = datetime.fromtimestamp(float(ts), tz=timezone.utc).astimezone(DISPLAY_TZ)
+    return dt.strftime(fmt)
 
 TOKEN = os.getenv("TOKEN", "").strip()
 

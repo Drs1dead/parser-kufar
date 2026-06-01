@@ -2,7 +2,7 @@ import re
 from html import escape
 from datetime import datetime, timezone
 
-from config import format_memory_volume, format_price
+from config import DISPLAY_TZ, format_local_datetime, format_memory_volume, format_price
 
 TELEGRAM_CAPTION_MAX = 1024
 _CAPTION_SAFE_MAX = 980
@@ -22,8 +22,7 @@ def _format_list_time(raw) -> str:
             ts = float(raw)
             if ts > 1e12:
                 ts /= 1000.0
-            dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone()
-            return dt.strftime("%d.%m.%Y %H:%M")
+            return format_local_datetime(ts)
         except (OSError, OverflowError, ValueError):
             return ""
     text = str(raw).strip()
@@ -34,7 +33,7 @@ def _format_list_time(raw) -> str:
         dt = datetime.fromisoformat(normalized)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone().strftime("%d.%m.%Y %H:%M")
+        return dt.astimezone(DISPLAY_TZ).strftime("%d.%m.%Y %H:%M")
     except ValueError:
         return text[:32]
 
@@ -119,8 +118,7 @@ def format_status(user: dict) -> str:
     vip_until = int(user.get("vip_until") or 0)
     vip_until_text = "—"
     if vip_until > 0:
-        dt = datetime.fromtimestamp(vip_until, tz=timezone.utc).astimezone()
-        vip_until_text = dt.strftime("%d.%m.%Y в %H:%M")
+        vip_until_text = format_local_datetime(vip_until, fmt="%d.%m.%Y в %H:%M")
 
     vip_feed = ""
     if user.get("role") == "vip":
