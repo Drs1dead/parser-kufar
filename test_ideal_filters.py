@@ -63,6 +63,21 @@ class IdealPreTests(unittest.TestCase):
             REJECT_IDEAL_BAD_CONDITION,
         )
 
+    def test_used_condition_pre_ok(self) -> None:
+        ad = _ad(
+            title="iPhone 14 Pro Max Идеальный",
+            summary="Смартфон · Состояние: Б/у",
+            condition_label="Б/у",
+        )
+        self.assertTrue(ideal_passes(ad, stage="pre"))
+
+    def test_ideal_in_title_pre_ok_without_condition_field(self) -> None:
+        ad = _ad(
+            title="iPhone 14 Pro Max Идеальный",
+            summary="Смартфон",
+        )
+        self.assertTrue(ideal_passes(ad, stage="pre"))
+
 
 class IdealStrictTests(unittest.TestCase):
     def test_excellent_battery_strict_ok(self) -> None:
@@ -106,6 +121,25 @@ class IdealStrictTests(unittest.TestCase):
         ad = _ad(
             condition_label="Хорошее",
             description="царапины на рамке, акб 80%",
+        )
+        self.assertTrue(ideal_passes(ad, stage="strict"))
+
+    def test_kufar_used_listing_strict_ok(self) -> None:
+        ad = _ad(
+            title="iPhone 14 Pro Max Идеальный",
+            summary="Смартфон · Состояние: Б/у",
+            condition_label="Б/у",
+            description=(
+                "Состояние идеальное. Аккумулятор оригинальный 87%. "
+                "Никогда не вскрывался и не ремонтировался."
+            ),
+        )
+        self.assertTrue(ideal_passes(ad, stage="strict"))
+
+    def test_akb_without_percent_strict_ok(self) -> None:
+        ad = _ad(
+            condition_label="Б/у",
+            description="все работает, АКБ 79, без ремонта",
         )
         self.assertTrue(ideal_passes(ad, stage="strict"))
 

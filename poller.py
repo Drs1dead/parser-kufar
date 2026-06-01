@@ -261,7 +261,12 @@ async def _process_user(
             mark_seen(chat_id, link)
             already_seen.add(link)
             increment_sent(chat_id)
-            if device_key and isinstance(price, int) and price > 0:
+            if (
+                is_vip
+                and device_key
+                and isinstance(price, int)
+                and price > 0
+            ):
                 save_market_price(ad["link"], device_key, price)
             await asyncio.sleep(0.05)
         else:

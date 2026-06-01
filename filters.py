@@ -168,6 +168,32 @@ IDEAL_REJECT_TERMS: tuple[str, ...] = (
     "обмен на",
 )
 
+# Явно плохие состояния Kufar (pre-отсев). «Б/у» — нейтрально, качество в strict.
+IDEAL_BAD_CONDITION_MARKERS: tuple[str, ...] = (
+    "удовлетворительн",
+    "плох",
+    "неисправ",
+    "требует ремонт",
+    "на запчаст",
+    "для запчаст",
+)
+
+IDEAL_NEUTRAL_CONDITION_MARKERS: tuple[str, ...] = (
+    "б/у",
+    "бу",
+    "used",
+)
+
+IDEAL_POSITIVE_CONDITION_HINTS: tuple[str, ...] = (
+    "идеальн",
+    "отличное состояние",
+    "отличн состоян",
+    "состояние отличное",
+    "как нов",
+    "без ремонт",
+    "не ремонтир",
+)
+
 IDEAL_HEADLINE_REJECT_TERMS: tuple[str, ...] = (
     "разбит",
     "трещин",
@@ -181,9 +207,10 @@ IDEAL_HEADLINE_REJECT_TERMS: tuple[str, ...] = (
 
 _BATTERY_PERCENT_RE = re.compile(
     r"(?:"
-    r"(?:акб|аккумулятор|батаре|battery|ёмкост|емкост|health|здоровь)[^\d]{0,24}(\d{2,3})\s*%?"
-    r"|(\d{2,3})\s*%\s*(?:акб|аккумулятор|батаре|battery|ёмкост|емкост|health)"
+    r"(?:акб|аккумулятор|батаре|battery|ёмкост|емкост|health|здоровь|емкост)[^\d]{0,32}(\d{2,3})\s*%?"
+    r"|(\d{2,3})\s*%\s*(?:акб|аккумулятор|батаре|battery|ёмкост|емкост|health|емкост)"
     r"|(?:акб|аккумулятор|батаре|battery)\s*(\d{2,3})\b"
+    r"|(?:емкост|ёмкост)\s*(?:акб|аккумулятор|батаре)?\s*(\d{2,3})\s*%?"
     r")",
     re.IGNORECASE,
 )
@@ -393,7 +420,8 @@ def filter_reject_reason(
     keywords: list[str] | None,
     *,
     memory_volumes: list[str] | None = None,
-    smart_filtering: bool,
+    smart_filtering: bool = False,
+    basic_filtering: bool = False,
     device_filter: bool = True,
     memory_filter: bool = True,
     skip_new_phone: bool = False,
@@ -417,9 +445,10 @@ def filter_reject_reason(
     headline = f"{title} {summary}".strip()
     full_text = f"{headline} {description}".strip()
 
-    if smart_filtering:
+    if basic_filtering or smart_filtering:
         if not is_whole_phone_listing(ad):
             return REJECT_NOT_WHOLE_PHONE
+    if smart_filtering:
         if not any(_contains_phrase(headline, t) for t in PHONE_REQUIRED_TERMS):
             return REJECT_NOT_PHONE
         if any(_contains_not_sale_term(headline, t) for t in NOT_SALE_TERMS):
@@ -458,7 +487,8 @@ def matches_filters(
     keywords: list[str] | None,
     *,
     memory_volumes: list[str] | None = None,
-    smart_filtering: bool,
+    smart_filtering: bool = False,
+    basic_filtering: bool = False,
     device_filter: bool = True,
     memory_filter: bool = True,
     skip_new_phone: bool = False,
@@ -476,6 +506,7 @@ def matches_filters(
             keywords,
             memory_volumes=memory_volumes,
             smart_filtering=smart_filtering,
+            basic_filtering=basic_filtering,
             device_filter=device_filter,
             memory_filter=memory_filter,
             skip_new_phone=skip_new_phone,
@@ -509,14 +540,43 @@ def _ideal_condition_label(ad: dict) -> str:
     return ""
 
 
-def _ideal_condition_ok(ad: dict) -> str | None:
-    label = _ideal_condition_label(ad)
-    if not label:
-        return REJECT_IDEAL_NO_CONDITION
+def _ideal_label_is_bad(label: str) -> bool:
+    return any(marker in label for marker in IDEAL_BAD_CONDITION_MARKERS)
+
+
+def _ideal_label_is_good(label: str) -> bool:
     allowed = {normalize(c) for c in IDEAL_ALLOWED_CONDITIONS}
-    if label not in allowed:
+    return label in allowed
+
+
+def _ideal_label_is_neutral(label: str) -> bool:
+    if label in IDEAL_NEUTRAL_CONDITION_MARKERS:
+        return True
+    return any(marker in label for marker in IDEAL_NEUTRAL_CONDITION_MARKERS)
+
+
+def _ideal_positive_condition_hint(text: str) -> bool:
+    t = normalize(text or "")
+    return bool(t) and any(_contains_phrase(t, hint) for hint in IDEAL_POSITIVE_CONDITION_HINTS)
+
+
+def _ideal_condition_ok(ad: dict) -> str | None:
+    """
+    Kufar чаще отдаёт «Б/у» — пропускаем на pre.
+    Явно плохие состояния отсекаем; «Отличное»/«Хорошее» — сразу ок.
+    """
+    label = _ideal_condition_label(ad)
+    if label:
+        if _ideal_label_is_bad(label):
+            return REJECT_IDEAL_BAD_CONDITION
+        if _ideal_label_is_good(label) or _ideal_label_is_neutral(label):
+            return None
+        if _ideal_positive_condition_hint(label):
+            return None
         return REJECT_IDEAL_BAD_CONDITION
-    return None
+    if _ideal_positive_condition_hint(ad_headline(ad)):
+        return None
+    return REJECT_IDEAL_NO_CONDITION
 
 
 def _ideal_text_has_term(text: str, terms: tuple[str, ...]) -> str | None:
@@ -560,6 +620,10 @@ def ideal_reject_reason(ad: dict, *, require_full_text: bool) -> str | None:
 
     percents = parse_battery_percents(full_text)
     if not percents:
+        if _ideal_label_is_good(_ideal_condition_label(ad)) and _ideal_positive_condition_hint(
+            full_text
+        ):
+            return None
         return REJECT_IDEAL_BATTERY_UNKNOWN
     if any(p < IDEAL_MIN_BATTERY_PERCENT for p in percents):
         return REJECT_IDEAL_BATTERY_LOW

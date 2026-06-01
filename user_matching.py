@@ -24,6 +24,11 @@ def _smart_filtering_for(user: dict) -> bool:
     return user.get("role") == "vip"
 
 
+def _basic_filtering_for(user: dict) -> bool:
+    """Для обычных: отсекаем коробки/аксессуары, без остальных VIP-правил."""
+    return user.get("role") != "vip"
+
+
 def _passes_base(ad: dict, user: dict, *, max_price: int, skip_new_phone: bool = False) -> bool:
     return matches_filters(
         ad,
@@ -31,6 +36,7 @@ def _passes_base(ad: dict, user: dict, *, max_price: int, skip_new_phone: bool =
         user["keywords"],
         memory_volumes=user.get("memory_volumes"),
         smart_filtering=_smart_filtering_for(user),
+        basic_filtering=_basic_filtering_for(user),
         device_filter=True,
         memory_filter=True,
         skip_new_phone=skip_new_phone,
@@ -46,6 +52,7 @@ def _log_reject(ad: dict, user: dict, *, max_price: int, feed_mode: str) -> None
         user["keywords"],
         memory_volumes=user.get("memory_volumes"),
         smart_filtering=_smart_filtering_for(user),
+        basic_filtering=_basic_filtering_for(user),
         device_filter=True,
         memory_filter=True,
     )
