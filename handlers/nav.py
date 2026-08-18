@@ -13,6 +13,7 @@ from config import (
     MEMORY_VOLUME_OPTIONS,
 )
 from kufar_catalog import CITY_RGN
+from product_catalog import is_phones_category
 from db import (
     get_user,
     redeem_promo_code,
@@ -42,8 +43,8 @@ from bot_ui import (
     vip_text,
 )
 from handlers.goods_ui import (
-    _goods_mobile_brands_keyboard,
-    _goods_mobile_brands_text,
+    _goods_categories_keyboard,
+    _goods_categories_text,
 )
 from handlers.admin import admin_home_text, admin_main_keyboard
 from handlers.helpers import (
@@ -237,8 +238,8 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
         if data == "nav:goods":
             await flush_screen(
                 cb,
-                _goods_mobile_brands_text(),
-                reply_markup=_goods_mobile_brands_keyboard(user),
+                _goods_categories_text(user),
+                reply_markup=_goods_categories_keyboard(user),
             )
             return
 
@@ -252,6 +253,9 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
             return
 
         if data == "nav:memory":
+            if not is_phones_category(user.get("product_category")):
+                await cb.answer("Память только для смартфонов", show_alert=True)
+                return
             await state.clear()
             await flush_screen(
                 cb,

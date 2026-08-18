@@ -15,6 +15,10 @@ from config import (
 )
 from db import count_referrals, ensure_referral_code
 from kufar_catalog import CITY_LABELS, CITY_ORDER, city_label, normalize_city
+from product_catalog import (
+    category_label,
+    is_phones_category,
+)
 
 GOODS_CRUMB = "📱 <b>Товары</b>"
 
@@ -27,14 +31,15 @@ SUPPORT_HANDLE = "@KufiBY"
 
 HELP_TEXT = (
     "💡 <b>Как пользоваться</b>\n\n"
-    "Бот ищет телефоны на <b>Kufar.by</b> и присылает подходящие объявления. "
+    "Бот ищет технику на <b>Kufar.by</b> и присылает подходящие объявления. "
     f"Цены — в белорусских рублях (<b>{CURRENCY_SIGN}</b>).\n\n"
-    "1. <b>Товары</b> — отметьте модели\n"
-    "2. <b>Память</b>, <b>Цена</b> и <b>Город</b> — фильтр\n"
+    "Одновременно ищется <b>одна категория</b>: смартфоны, ноутбуки, планшеты или часы.\n\n"
+    "1. <b>Товары</b> — категория и модели\n"
+    "2. <b>Цена</b>, <b>Город</b> и (для смартфонов) <b>Память</b>\n"
     "3. <b>Включить уведомления</b> в главном меню\n\n"
     "<b>Кнопки меню</b>\n"
-    "📱 Товары — какие модели искать\n"
-    "💾 Память — объём накопителя\n"
+    "📱 Товары — категория и модели\n"
+    "💾 Память — объём накопителя (смартфоны)\n"
     f"💰 Цена — максимум в {CURRENCY_SIGN}\n"
     "📍 Город — где искать объявления\n"
     "🔔 Уведомления — вкл или пауза\n"
@@ -132,18 +137,23 @@ def home_text(user: dict | None, *, is_new: bool) -> str:
     if is_new:
         lines += [
             "<b>Как начать</b>",
-            "1. Товары — выберите модели",
-            "2. Цена, Память и Город — фильтр",
+            "1. Товары — категория и модели",
+            "2. Цена, Город и (для смартфонов) Память",
             "3. Включить уведомления",
             "",
         ]
-    lines += [
+    status = [
         f"Уведомления: <b>{sub}</b>",
+        f"Категория: <b>{category_label(user.get('product_category'))}</b>",
         f"Модели: <b>{models_n}</b> {model_word}",
-        f"Память: <b>{_memory_display(user.get('memory_volumes'))}</b>",
+    ]
+    if is_phones_category(user.get("product_category")):
+        status.append(f"Память: <b>{_memory_display(user.get('memory_volumes'))}</b>")
+    status += [
         f"Цена: до <b>{format_price(max_p)}</b>",
         f"Город: <b>{city_label(user.get('city'))}</b>",
     ]
+    lines += status
 
     mode = user.get("vip_feed_mode") or "normal"
     if user.get("role") == "vip":
@@ -190,12 +200,10 @@ def home_keyboard(*, is_admin: bool, user: dict | None = None) -> InlineKeyboard
             [InlineKeyboardButton(text="🔔 Включить уведомления", callback_data="nav:resume")]
         )
     rows.append([InlineKeyboardButton(text="📱 Товары", callback_data="nav:goods")])
-    rows.append(
-        [
-            InlineKeyboardButton(text="💰 Цена", callback_data="nav:price"),
-            InlineKeyboardButton(text="💾 Память", callback_data="nav:memory"),
-        ]
-    )
+    filter_row = [InlineKeyboardButton(text="💰 Цена", callback_data="nav:price")]
+    if is_phones_category((user or {}).get("product_category")):
+        filter_row.append(InlineKeyboardButton(text="💾 Память", callback_data="nav:memory"))
+    rows.append(filter_row)
     rows.append([InlineKeyboardButton(text="📍 Город", callback_data="nav:city")])
     rows.append(
         [

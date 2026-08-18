@@ -5,6 +5,8 @@ from bot_ui import GOODS_CRUMB
 from goods_tree import (
     APPLE_LINES,
     GOODS_PER_PAGE,
+    LAPTOP_LINE_LABELS,
+    LAPTOP_LINES,
     LINE_BASIC,
     LINE_LABELS,
     LINE_MAX,
@@ -16,8 +18,24 @@ from goods_tree import (
     SAMSUNG_SERIES_LABELS,
     SAMSUNG_SERIES_LINES,
     SAMSUNG_SERIES_S,
+    TABLET_LINE_LABELS,
+    TABLET_LINES,
+    WATCH_LINE_LABELS,
+    WATCH_LINES,
 )
 from handlers.helpers import is_vip_user
+from product_catalog import (
+    CAT_LAPTOPS,
+    CAT_PHONES,
+    CAT_TABLETS,
+    CAT_WATCHES,
+    CATEGORY_EMOJI,
+    CATEGORY_LABELS,
+    PHONE_MODELS,
+    PRODUCT_CATEGORIES,
+    category_label,
+    normalize_category,
+)
 
 __all__ = [
     "_max_keyword_slots",
@@ -106,7 +124,7 @@ def _goods_mobile_brands_keyboard(user: dict | None = None) -> InlineKeyboardMar
     ]
     if is_vip_user(user):
         rows.append([InlineKeyboardButton(text="📋 Все бренды", callback_data="bulk:all")])
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:home")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:goods")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -309,6 +327,206 @@ def _goods_line_keyboard(user: dict, line_slug: str, page: int) -> InlineKeyboar
         footer_buttons=[
             InlineKeyboardButton(text="Готово", callback_data="kw:done"),
             InlineKeyboardButton(text="⬅️ Назад", callback_data="goods:a"),
+        ],
+    )
+
+
+def _goods_categories_text(user: dict | None = None) -> str:
+    current = category_label((user or {}).get("product_category"))
+    return (
+        f"{GOODS_CRUMB}\n\n"
+        f"Сейчас: <b>{current}</b>\n\n"
+        "Ищем только одну категорию. Смена сбросит выбранные модели."
+    )
+
+
+def _goods_categories_keyboard(user: dict | None = None) -> InlineKeyboardMarkup:
+    current = normalize_category((user or {}).get("product_category"))
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for slug in PRODUCT_CATEGORIES:
+        mark = " ✅" if slug == current else ""
+        row.append(
+            InlineKeyboardButton(
+                text=f"{CATEGORY_EMOJI[slug]} {CATEGORY_LABELS[slug]}{mark}",
+                callback_data=f"gc:{slug}",
+            )
+        )
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _goods_switch_confirm_text(slug: str) -> str:
+    return (
+        f"{GOODS_CRUMB}\n\n"
+        f"Сменить категорию на <b>{category_label(slug)}</b>?\n"
+        "Выбранные модели сбросятся — ищем только одну категорию."
+    )
+
+
+def _goods_switch_confirm_keyboard(slug: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, сменить", callback_data=f"gx:{slug}"
+                )
+            ],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:goods")],
+        ]
+    )
+
+
+def _category_lines_text(slug: str) -> str:
+    return (
+        f"{GOODS_CRUMB} › <b>{category_label(slug)}</b>\n\n"
+        "Выберите линейку, затем отметьте модели."
+    )
+
+
+def _laptop_lines_keyboard(user: dict | None = None) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=LAPTOP_LINE_LABELS[slug],
+                callback_data=f"lt:{slug}:p:0",
+            )
+            for slug in LAPTOP_LINE_LABELS
+        ]
+    ]
+    if is_vip_user(user):
+        rows.append(
+            [InlineKeyboardButton(text="📋 Все MacBook", callback_data="bulk:lap")]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:goods")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _tablet_lines_keyboard(user: dict | None = None) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for slug, label in TABLET_LINE_LABELS.items():
+        row.append(InlineKeyboardButton(text=label, callback_data=f"pt:{slug}:p:0"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    if is_vip_user(user):
+        rows.append([InlineKeyboardButton(text="📋 Все iPad", callback_data="bulk:tab")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:goods")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _watch_lines_keyboard(user: dict | None = None) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(text=label, callback_data=f"wt:{slug}:p:0")
+            for slug, label in WATCH_LINE_LABELS.items()
+        ]
+    ]
+    if is_vip_user(user):
+        rows.append(
+            [InlineKeyboardButton(text="📋 Все Apple Watch", callback_data="bulk:wat")]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:goods")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _flatten_line_map(lines: dict[str, tuple[str, ...]]) -> list[str]:
+    return _flatten_groups(lines)
+
+
+def _category_line_pick_text(brand: str, line_slug: str, user: dict | None = None) -> str:
+    labels = {
+        "laptop": (LAPTOP_LINE_LABELS, "Ноутбуки"),
+        "tablet": (TABLET_LINE_LABELS, "Планшеты"),
+        "watch": (WATCH_LINE_LABELS, "Смарт-часы"),
+    }
+    line_labels, brand_title = labels[brand]
+    title = line_labels.get(line_slug, line_slug)
+    lines = [
+        f"{GOODS_CRUMB} › <b>{brand_title}</b> › <b>{title}</b>",
+        "",
+        "Нажмите модель, чтобы включить или выключить.",
+    ]
+    if not is_vip_user(user):
+        limit = _max_keyword_slots({"role": "regular"})
+        lines.append(f"Обычный аккаунт: до {limit} моделей.")
+    lines.append("Готово — в главное меню.")
+    return "\n".join(lines)
+
+
+def _laptop_line_pick_text(line_slug: str, user: dict | None = None) -> str:
+    return _category_line_pick_text("laptop", line_slug, user)
+
+
+def _tablet_line_pick_text(line_slug: str, user: dict | None = None) -> str:
+    return _category_line_pick_text("tablet", line_slug, user)
+
+
+def _watch_line_pick_text(line_slug: str, user: dict | None = None) -> str:
+    return _category_line_pick_text("watch", line_slug, user)
+
+
+def _laptop_line_keyboard(user: dict, line_slug: str, page: int) -> InlineKeyboardMarkup | None:
+    models = LAPTOP_LINES.get(line_slug)
+    if not models:
+        return None
+    bulk = f"bulk:ll:{line_slug}" if is_vip_user(user) else None
+    return _paginated_models_keyboard(
+        user,
+        models,
+        line_slug,
+        page,
+        toggle_prefix="lt",
+        bulk_callback=bulk,
+        footer_buttons=[
+            InlineKeyboardButton(text="Готово", callback_data="kw:done"),
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="gc:laptops"),
+        ],
+    )
+
+
+def _tablet_line_keyboard(user: dict, line_slug: str, page: int) -> InlineKeyboardMarkup | None:
+    models = TABLET_LINES.get(line_slug)
+    if not models:
+        return None
+    bulk = f"bulk:tl:{line_slug}" if is_vip_user(user) else None
+    return _paginated_models_keyboard(
+        user,
+        models,
+        line_slug,
+        page,
+        toggle_prefix="pt",
+        bulk_callback=bulk,
+        footer_buttons=[
+            InlineKeyboardButton(text="Готово", callback_data="kw:done"),
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="gc:tablets"),
+        ],
+    )
+
+
+def _watch_line_keyboard(user: dict, line_slug: str, page: int) -> InlineKeyboardMarkup | None:
+    models = WATCH_LINES.get(line_slug)
+    if not models:
+        return None
+    bulk = f"bulk:wl:{line_slug}" if is_vip_user(user) else None
+    return _paginated_models_keyboard(
+        user,
+        models,
+        line_slug,
+        page,
+        toggle_prefix="wt",
+        bulk_callback=bulk,
+        footer_buttons=[
+            InlineKeyboardButton(text="Готово", callback_data="kw:done"),
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="gc:watches"),
         ],
     )
 

@@ -10,11 +10,41 @@ import logging
 from collections import defaultdict
 
 from config import DEFAULT_MEMORY_VOLUMES, MEMORY_VOLUME_OPTIONS
+from product_catalog import (
+    CAT_LAPTOPS,
+    CAT_PHONES,
+    CAT_TABLETS,
+    CAT_WATCHES,
+    is_phones_category,
+    normalize_category,
+)
 
 log = logging.getLogger(__name__)
 
 KUFAR_PHONE_CAT = 17010
+KUFAR_LAPTOP_CAT = 16040
+KUFAR_TABLET_CAT = 17050
+KUFAR_WATCH_CAT = 17090
 KUFAR_PRIVATE_OT = 1
+KUFAR_APPLE_LAPTOP_CLB = 5
+KUFAR_APPLE_TABLET_PHTBR = 1
+KUFAR_IOS_TABLET_PHTO = 5
+KUFAR_APPLE_WATCH_PHSWBR = 5
+# Apple silicon (без Intel). Снято с search-api computers_laptop_processor.
+APPLE_SILICON_CLP: tuple[int, ...] = (
+    64,  # M1
+    65,  # M2
+    66,  # M3
+    67,  # M3 Pro
+    68,  # M3 Max
+    69,  # M4
+    71,  # M1 Pro
+    73,  # M2 Pro
+    75,  # M4 Pro
+    76,  # M5
+    77,  # M5 Pro
+    78,  # M5 Max
+)
 
 # Регион API (не район ar). Проверено по полю region.vl в выдаче.
 CITY_RGN: dict[str, int] = {
@@ -188,16 +218,34 @@ def catalog_search_params(
     city: str,
     models: list[str] | tuple[str, ...],
     memories: list[str] | tuple[str, ...],
+    *,
+    category: str | None = None,
 ) -> list[dict[str, str]]:
     """Facet-параметры для search-api. Без query: на Kufar это полнотекст, не фильтр модели."""
+    kind = normalize_category(category)
     rgn = str(city_rgn(city))
+    if kind == CAT_PHONES:
+        return _phone_search_params(rgn, models, memories)
+    if kind == CAT_LAPTOPS:
+        return _laptop_search_params(rgn, models)
+    if kind == CAT_TABLETS:
+        return _tablet_search_params(rgn, models)
+    if kind == CAT_WATCHES:
+        return _watch_search_params(rgn, models)
+    return []
+
+
+def _phone_search_params(
+    rgn: str,
+    models: list[str] | tuple[str, ...],
+    memories: list[str] | tuple[str, ...],
+) -> list[dict[str, str]]:
     ppm = or_facet(_memory_ppm_ids(memories))
     phm_ids, missing = _split_models(models)
     for name in missing:
         log.warning("kufar catalog: no phm for model %r, skip", name)
     if not phm_ids:
         return []
-
     row: dict[str, str] = {
         "cat": str(KUFAR_PHONE_CAT),
         "ot": str(KUFAR_PRIVATE_OT),
@@ -209,11 +257,54 @@ def catalog_search_params(
     return [row]
 
 
-FetchKey = tuple[str, tuple[str, ...], tuple[str, ...]]
+def _laptop_search_params(rgn: str, models: list[str] | tuple[str, ...]) -> list[dict[str, str]]:
+    if not any(_norm_token(m).startswith("macbook") for m in models):
+        return []
+    clp = or_facet(APPLE_SILICON_CLP)
+    row: dict[str, str] = {
+        "cat": str(KUFAR_LAPTOP_CAT),
+        "ot": str(KUFAR_PRIVATE_OT),
+        "rgn": rgn,
+        "clb": str(KUFAR_APPLE_LAPTOP_CLB),
+    }
+    if clp:
+        row["clp"] = clp
+    return [row]
+
+
+def _tablet_search_params(rgn: str, models: list[str] | tuple[str, ...]) -> list[dict[str, str]]:
+    if not any(_norm_token(m).startswith("ipad") for m in models):
+        return []
+    return [
+        {
+            "cat": str(KUFAR_TABLET_CAT),
+            "ot": str(KUFAR_PRIVATE_OT),
+            "rgn": rgn,
+            "phtbr": str(KUFAR_APPLE_TABLET_PHTBR),
+            "phto": str(KUFAR_IOS_TABLET_PHTO),
+        }
+    ]
+
+
+def _watch_search_params(rgn: str, models: list[str] | tuple[str, ...]) -> list[dict[str, str]]:
+    if not any(_norm_token(m).startswith("apple watch") for m in models):
+        return []
+    return [
+        {
+            "cat": str(KUFAR_WATCH_CAT),
+            "ot": str(KUFAR_PRIVATE_OT),
+            "rgn": rgn,
+            "phswbr": str(KUFAR_APPLE_WATCH_PHSWBR),
+        }
+    ]
+
+
+FetchKey = tuple[str, str, tuple[str, ...], tuple[str, ...]]
 
 
 def fetch_key_for_user(user: dict | None) -> FetchKey:
-    """Ключ выдачи: город + модели + память."""
+    """Ключ выдачи: категория + город + модели + память (память только у смартфонов)."""
+    category = normalize_category((user or {}).get("product_category"))
     models = tuple(
         sorted(
             {
@@ -223,6 +314,8 @@ def fetch_key_for_user(user: dict | None) -> FetchKey:
             }
         )
     )
+    if not is_phones_category(category):
+        return (category, normalize_city((user or {}).get("city")), models, ())
     raw_mem = (user or {}).get("memory_volumes") or list(DEFAULT_MEMORY_VOLUMES)
     allowed = set(MEMORY_VOLUME_OPTIONS)
     memories = tuple(
@@ -230,14 +323,14 @@ def fetch_key_for_user(user: dict | None) -> FetchKey:
     )
     if not memories:
         memories = tuple(DEFAULT_MEMORY_VOLUMES)
-    return (normalize_city((user or {}).get("city")), models, memories)
+    return (category, normalize_city((user or {}).get("city")), models, memories)
 
 
 def group_users_by_fetch_key(users: list[dict]) -> dict[FetchKey, list[dict]]:
     groups: dict[FetchKey, list[dict]] = defaultdict(list)
     for user in users:
         key = fetch_key_for_user(user)
-        if not key[1]:
+        if not key[2]:
             continue
         groups[key].append(user)
     return dict(groups)

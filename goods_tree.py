@@ -1,7 +1,12 @@
-"""Дерево «Товары»: модели Apple и Samsung из DEVICE_CATALOG."""
+"""Дерево «Товары»: линейки по категориям."""
 from __future__ import annotations
 
-from config import DEVICE_CATALOG
+from product_catalog import (
+    LAPTOP_MODELS,
+    PHONE_MODELS,
+    TABLET_MODELS,
+    WATCH_MODELS,
+)
 
 # Короткие slug для callback (Telegram лимит 64 байта на callback_data)
 LINE_BASIC = "b"
@@ -15,6 +20,15 @@ SAMSUNG_LINE_PLUS = "p"
 SAMSUNG_LINE_ULTRA = "u"
 SAMSUNG_LINE_FLIP = "f"
 SAMSUNG_LINE_FOLD = "d"
+LAPTOP_LINE_AIR = "a"
+LAPTOP_LINE_PRO = "p"
+TABLET_LINE_IPAD = "i"
+TABLET_LINE_AIR = "a"
+TABLET_LINE_MINI = "n"
+TABLET_LINE_PRO = "p"
+WATCH_LINE_SERIES = "s"
+WATCH_LINE_SE = "e"
+WATCH_LINE_ULTRA = "u"
 
 LINE_LABELS: dict[str, str] = {
     LINE_BASIC: "iPhone / mini / Plus / SE",
@@ -42,6 +56,22 @@ SAMSUNG_SERIES_LINES: dict[str, tuple[str, ...]] = {
     SAMSUNG_SERIES_FOLD: (SAMSUNG_LINE_FOLD,),
 }
 
+LAPTOP_LINE_LABELS: dict[str, str] = {
+    LAPTOP_LINE_AIR: "MacBook Air",
+    LAPTOP_LINE_PRO: "MacBook Pro",
+}
+TABLET_LINE_LABELS: dict[str, str] = {
+    TABLET_LINE_IPAD: "iPad",
+    TABLET_LINE_AIR: "iPad Air",
+    TABLET_LINE_MINI: "iPad mini",
+    TABLET_LINE_PRO: "iPad Pro",
+}
+WATCH_LINE_LABELS: dict[str, str] = {
+    WATCH_LINE_SERIES: "Series",
+    WATCH_LINE_SE: "SE",
+    WATCH_LINE_ULTRA: "Ultra",
+}
+
 GOODS_PER_PAGE = 8
 
 
@@ -57,9 +87,9 @@ def line_slug_for_catalog_entry(device: str) -> str:
 
 
 def apple_lines_map() -> dict[str, tuple[str, ...]]:
-    """Все модели из DEVICE_CATALOG, сгруппированные по линейке (порядок как в каталоге)."""
+    """iPhone из каталога смартфонов, сгруппированные по линейке."""
     buckets: dict[str, list[str]] = {LINE_BASIC: [], LINE_PRO: [], LINE_MAX: []}
-    for d in DEVICE_CATALOG:
+    for d in PHONE_MODELS:
         if not d.lower().startswith("iphone"):
             continue
         buckets[line_slug_for_catalog_entry(d)].append(d)
@@ -89,8 +119,77 @@ def samsung_lines_map() -> dict[str, tuple[str, ...]]:
         SAMSUNG_LINE_FLIP: [],
         SAMSUNG_LINE_FOLD: [],
     }
-    for d in DEVICE_CATALOG:
+    for d in PHONE_MODELS:
         slug = samsung_line_slug_for_catalog_entry(d)
+        if slug is not None:
+            buckets[slug].append(d)
+    return {k: tuple(v) for k, v in buckets.items()}
+
+
+def laptop_line_slug_for_catalog_entry(device: str) -> str | None:
+    s = " ".join((device or "").lower().split())
+    if s.startswith("macbook air"):
+        return LAPTOP_LINE_AIR
+    if s.startswith("macbook pro"):
+        return LAPTOP_LINE_PRO
+    return None
+
+
+def laptop_lines_map() -> dict[str, tuple[str, ...]]:
+    buckets: dict[str, list[str]] = {LAPTOP_LINE_AIR: [], LAPTOP_LINE_PRO: []}
+    for d in LAPTOP_MODELS:
+        slug = laptop_line_slug_for_catalog_entry(d)
+        if slug is not None:
+            buckets[slug].append(d)
+    return {k: tuple(v) for k, v in buckets.items()}
+
+
+def tablet_line_slug_for_catalog_entry(device: str) -> str | None:
+    s = " ".join((device or "").lower().split())
+    if not s.startswith("ipad"):
+        return None
+    if s.startswith("ipad air"):
+        return TABLET_LINE_AIR
+    if s.startswith("ipad mini"):
+        return TABLET_LINE_MINI
+    if s.startswith("ipad pro"):
+        return TABLET_LINE_PRO
+    return TABLET_LINE_IPAD
+
+
+def tablet_lines_map() -> dict[str, tuple[str, ...]]:
+    buckets: dict[str, list[str]] = {
+        TABLET_LINE_IPAD: [],
+        TABLET_LINE_AIR: [],
+        TABLET_LINE_MINI: [],
+        TABLET_LINE_PRO: [],
+    }
+    for d in TABLET_MODELS:
+        slug = tablet_line_slug_for_catalog_entry(d)
+        if slug is not None:
+            buckets[slug].append(d)
+    return {k: tuple(v) for k, v in buckets.items()}
+
+
+def watch_line_slug_for_catalog_entry(device: str) -> str | None:
+    s = " ".join((device or "").lower().split())
+    if not s.startswith("apple watch"):
+        return None
+    if s.startswith("apple watch ultra"):
+        return WATCH_LINE_ULTRA
+    if s.startswith("apple watch se"):
+        return WATCH_LINE_SE
+    return WATCH_LINE_SERIES
+
+
+def watch_lines_map() -> dict[str, tuple[str, ...]]:
+    buckets: dict[str, list[str]] = {
+        WATCH_LINE_SERIES: [],
+        WATCH_LINE_SE: [],
+        WATCH_LINE_ULTRA: [],
+    }
+    for d in WATCH_MODELS:
+        slug = watch_line_slug_for_catalog_entry(d)
         if slug is not None:
             buckets[slug].append(d)
     return {k: tuple(v) for k, v in buckets.items()}
@@ -98,3 +197,6 @@ def samsung_lines_map() -> dict[str, tuple[str, ...]]:
 
 APPLE_LINES: dict[str, tuple[str, ...]] = apple_lines_map()
 SAMSUNG_LINES: dict[str, tuple[str, ...]] = samsung_lines_map()
+LAPTOP_LINES: dict[str, tuple[str, ...]] = laptop_lines_map()
+TABLET_LINES: dict[str, tuple[str, ...]] = tablet_lines_map()
+WATCH_LINES: dict[str, tuple[str, ...]] = watch_lines_map()

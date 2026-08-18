@@ -5,27 +5,41 @@ from collections.abc import Callable
 from aiogram import Router
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup
 
-from config import DEVICE_CATALOG
 from goods_tree import (
     APPLE_LINES,
     GOODS_PER_PAGE,
+    LAPTOP_LINE_LABELS,
+    LAPTOP_LINES,
     LINE_LABELS,
     SAMSUNG_LINE_LABELS,
     SAMSUNG_LINES,
     SAMSUNG_SERIES_LABELS,
+    TABLET_LINE_LABELS,
+    TABLET_LINES,
+    WATCH_LINE_LABELS,
+    WATCH_LINES,
 )
-from db import update_keywords
+from db import update_keywords, update_product_category
 from bot_ui import home_keyboard, home_text
 from handlers.goods_ui import (
     _apple_models,
+    _category_lines_text,
+    _flatten_line_map,
     _goods_apple_lines_keyboard,
     _goods_apple_lines_text,
+    _goods_categories_keyboard,
+    _goods_categories_text,
     _goods_line_keyboard,
     _goods_line_pick_text,
     _goods_mobile_brands_keyboard,
     _goods_mobile_brands_text,
     _goods_samsung_keyboard,
     _goods_samsung_text,
+    _goods_switch_confirm_keyboard,
+    _goods_switch_confirm_text,
+    _laptop_line_keyboard,
+    _laptop_line_pick_text,
+    _laptop_lines_keyboard,
     _max_keyword_slots,
     _samsung_line_keyboard,
     _samsung_line_pick_text,
@@ -33,7 +47,13 @@ from handlers.goods_ui import (
     _samsung_series_keyboard,
     _samsung_series_models,
     _samsung_series_text,
+    _tablet_line_keyboard,
+    _tablet_line_pick_text,
+    _tablet_lines_keyboard,
     _toggle_models,
+    _watch_line_keyboard,
+    _watch_line_pick_text,
+    _watch_lines_keyboard,
 )
 from handlers.helpers import (
     flush_screen,
@@ -43,9 +63,47 @@ from handlers.helpers import (
     safe_cb_answer,
 )
 from logging_setup import log_exception
+from product_catalog import (
+    CAT_LAPTOPS,
+    CAT_PHONES,
+    CAT_TABLETS,
+    CAT_WATCHES,
+    PHONE_MODELS,
+    normalize_category,
+)
 
 log = logging.getLogger(__name__)
 router = Router()
+
+
+async def show_category_screen(cb: CallbackQuery, user: dict, slug: str) -> None:
+    kind = normalize_category(slug)
+    if kind == CAT_PHONES:
+        await flush_screen(
+            cb,
+            _goods_mobile_brands_text(),
+            reply_markup=_goods_mobile_brands_keyboard(user),
+        )
+        return
+    if kind == CAT_LAPTOPS:
+        await flush_screen(
+            cb,
+            _category_lines_text(kind),
+            reply_markup=_laptop_lines_keyboard(user),
+        )
+        return
+    if kind == CAT_TABLETS:
+        await flush_screen(
+            cb,
+            _category_lines_text(kind),
+            reply_markup=_tablet_lines_keyboard(user),
+        )
+        return
+    await flush_screen(
+        cb,
+        _category_lines_text(CAT_WATCHES),
+        reply_markup=_watch_lines_keyboard(user),
+    )
 
 
 async def _toggle_catalog_keyword(
@@ -166,7 +224,9 @@ async def on_bulk_select_callback(cb: CallbackQuery) -> None:
 
     try:
         if data == "bulk:all":
-            models = DEVICE_CATALOG
+            models = PHONE_MODELS
+            text = _goods_mobile_brands_text()
+            markup = _goods_mobile_brands_keyboard(user)
         elif data == "bulk:apple":
             models = _apple_models()
             text = _goods_apple_lines_text()
@@ -192,6 +252,30 @@ async def on_bulk_select_callback(cb: CallbackQuery) -> None:
             line_slug = parts[2]
             models = SAMSUNG_LINES.get(line_slug, ())
             text = _samsung_line_pick_text(line_slug, user)
+        elif data == "bulk:lap":
+            models = _flatten_line_map(LAPTOP_LINES)
+            text = _category_lines_text(CAT_LAPTOPS)
+            markup = _laptop_lines_keyboard(user)
+        elif data == "bulk:tab":
+            models = _flatten_line_map(TABLET_LINES)
+            text = _category_lines_text(CAT_TABLETS)
+            markup = _tablet_lines_keyboard(user)
+        elif data == "bulk:wat":
+            models = _flatten_line_map(WATCH_LINES)
+            text = _category_lines_text(CAT_WATCHES)
+            markup = _watch_lines_keyboard(user)
+        elif len(parts) == 3 and parts[1] == "ll" and parts[2] in LAPTOP_LINE_LABELS:
+            line_slug = parts[2]
+            models = LAPTOP_LINES.get(line_slug, ())
+            text = _laptop_line_pick_text(line_slug, user)
+        elif len(parts) == 3 and parts[1] == "tl" and parts[2] in TABLET_LINE_LABELS:
+            line_slug = parts[2]
+            models = TABLET_LINES.get(line_slug, ())
+            text = _tablet_line_pick_text(line_slug, user)
+        elif len(parts) == 3 and parts[1] == "wl" and parts[2] in WATCH_LINE_LABELS:
+            line_slug = parts[2]
+            models = WATCH_LINES.get(line_slug, ())
+            text = _watch_line_pick_text(line_slug, user)
         else:
             await cb.answer("Неизвестное действие", show_alert=True)
             return
@@ -215,6 +299,18 @@ async def on_bulk_select_callback(cb: CallbackQuery) -> None:
             markup = _samsung_series_keyboard(parts[2], user)
         elif len(parts) == 3 and parts[1] == "sg" and parts[2] in SAMSUNG_LINE_LABELS:
             markup = _samsung_line_keyboard(user, parts[2], 0)
+        elif data == "bulk:lap":
+            markup = _laptop_lines_keyboard(user)
+        elif data == "bulk:tab":
+            markup = _tablet_lines_keyboard(user)
+        elif data == "bulk:wat":
+            markup = _watch_lines_keyboard(user)
+        elif len(parts) == 3 and parts[1] == "ll" and parts[2] in LAPTOP_LINE_LABELS:
+            markup = _laptop_line_keyboard(user, parts[2], 0)
+        elif len(parts) == 3 and parts[1] == "tl" and parts[2] in TABLET_LINE_LABELS:
+            markup = _tablet_line_keyboard(user, parts[2], 0)
+        elif len(parts) == 3 and parts[1] == "wl" and parts[2] in WATCH_LINE_LABELS:
+            markup = _watch_line_keyboard(user, parts[2], 0)
         if markup is None:
             await cb.answer("Нет моделей для выбора", show_alert=True)
             return
@@ -243,7 +339,15 @@ async def on_goods_callback(cb: CallbackQuery) -> None:
         return
 
     try:
-        if data in ("goods:h", "goods:m"):
+        if data == "goods:h":
+            await flush_screen(
+                cb,
+                _goods_categories_text(user),
+                reply_markup=_goods_categories_keyboard(user),
+            )
+            return
+
+        if data == "goods:m":
             await flush_screen(
                 cb,
                 _goods_mobile_brands_text(),
@@ -318,6 +422,86 @@ async def on_line_toggle_callback(cb: CallbackQuery) -> None:
             line_keyboard=_goods_line_keyboard,
             log_tag="goods_tree",
         )
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("lt:"))
+async def on_laptop_line_toggle(cb: CallbackQuery) -> None:
+    await _on_line_toggle_callback(
+        cb,
+        prefix="lt",
+        line_labels=LAPTOP_LINE_LABELS,
+        lines_map=LAPTOP_LINES,
+        pick_text=_laptop_line_pick_text,
+        line_keyboard=_laptop_line_keyboard,
+        log_tag="laptops",
+    )
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("pt:"))
+async def on_tablet_line_toggle(cb: CallbackQuery) -> None:
+    await _on_line_toggle_callback(
+        cb,
+        prefix="pt",
+        line_labels=TABLET_LINE_LABELS,
+        lines_map=TABLET_LINES,
+        pick_text=_tablet_line_pick_text,
+        line_keyboard=_tablet_line_keyboard,
+        log_tag="tablets",
+    )
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("wt:"))
+async def on_watch_line_toggle(cb: CallbackQuery) -> None:
+    await _on_line_toggle_callback(
+        cb,
+        prefix="wt",
+        line_labels=WATCH_LINE_LABELS,
+        lines_map=WATCH_LINES,
+        pick_text=_watch_line_pick_text,
+        line_keyboard=_watch_line_keyboard,
+        log_tag="watches",
+    )
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("gc:"))
+async def on_goods_category(cb: CallbackQuery) -> None:
+    if cb.message is None:
+        await cb.answer()
+        return
+    user = await require_user_cb(cb)
+    if user is None:
+        return
+    slug = normalize_category((cb.data or "")[3:])
+    current = normalize_category(user.get("product_category"))
+    if slug == current:
+        await show_category_screen(cb, user, slug)
+        return
+    if user.get("keywords"):
+        await flush_screen(
+            cb,
+            _goods_switch_confirm_text(slug),
+            reply_markup=_goods_switch_confirm_keyboard(slug),
+        )
+        return
+    chat_id = cb.message.chat.id
+    user["product_category"] = update_product_category(chat_id, slug)
+    user["keywords"] = []
+    await show_category_screen(cb, user, slug)
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("gx:"))
+async def on_goods_category_confirm(cb: CallbackQuery) -> None:
+    if cb.message is None:
+        await cb.answer()
+        return
+    user = await require_user_cb(cb)
+    if user is None:
+        return
+    slug = normalize_category((cb.data or "")[3:])
+    chat_id = cb.message.chat.id
+    user["product_category"] = update_product_category(chat_id, slug)
+    user["keywords"] = []
+    await show_category_screen(cb, user, slug)
 
 
 @router.callback_query(lambda c: (c.data or "") == "kw:done")

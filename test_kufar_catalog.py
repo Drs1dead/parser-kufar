@@ -86,13 +86,58 @@ class CatalogParamsTests(unittest.TestCase):
         )
 
     def test_full_catalog_one_phm_request(self) -> None:
-        from config import DEVICE_CATALOG
+        from product_catalog import PHONE_MODELS
 
-        rows = catalog_search_params("minsk", DEVICE_CATALOG, ["256"])
+        rows = catalog_search_params("minsk", PHONE_MODELS, ["256"])
         self.assertEqual(len(rows), 1)
         self.assertNotIn("query", rows[0])
         self.assertTrue(rows[0]["phm"].startswith("v.or:"))
         self.assertIn("4500", rows[0]["phm"])
+
+    def test_laptops_apple_silicon_no_query_no_ppm(self) -> None:
+        rows = catalog_search_params(
+            "minsk",
+            ["macbook air m1", "macbook pro 14"],
+            ["256"],
+            category="laptops",
+        )
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["cat"], "16040")
+        self.assertEqual(row["clb"], "5")
+        self.assertTrue(row["clp"].startswith("v.or:"))
+        self.assertNotIn("query", row)
+        self.assertNotIn("ppm", row)
+        self.assertNotIn("phm", row)
+
+    def test_tablets_apple_no_query_no_ppm(self) -> None:
+        rows = catalog_search_params(
+            "minsk",
+            ["ipad air 4", "ipad pro 11"],
+            ["256"],
+            category="tablets",
+        )
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["cat"], "17050")
+        self.assertEqual(row["phtbr"], "1")
+        self.assertEqual(row["phto"], "5")
+        self.assertNotIn("query", row)
+        self.assertNotIn("ppm", row)
+        self.assertNotIn("phm", row)
+
+    def test_watches_apple_brand_no_query(self) -> None:
+        rows = catalog_search_params(
+            "minsk",
+            ["apple watch series 7"],
+            ["64"],
+            category="watches",
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["cat"], "17090")
+        self.assertEqual(rows[0]["phswbr"], "5")
+        self.assertNotIn("query", rows[0])
+        self.assertNotIn("ppm", rows[0])
 
 
 class FetchKeyTests(unittest.TestCase):
@@ -106,7 +151,8 @@ class FetchKeyTests(unittest.TestCase):
             "memory_volumes": ["256"],
         }
         self.assertEqual(fetch_key_for_user(a), fetch_key_for_user(b))
-        self.assertEqual(fetch_key_for_user(a)[0], DEFAULT_CITY)
+        self.assertEqual(fetch_key_for_user(a)[1], DEFAULT_CITY)
+        self.assertEqual(fetch_key_for_user(a)[0], "phones")
 
     def test_same_model_different_city_two_keys(self) -> None:
         minsk = {
@@ -121,10 +167,10 @@ class FetchKeyTests(unittest.TestCase):
         }
         key_m = fetch_key_for_user(minsk)
         key_b = fetch_key_for_user(brest)
-        self.assertEqual(key_m[1], key_b[1])
         self.assertEqual(key_m[2], key_b[2])
-        self.assertEqual(key_m[0], "minsk")
-        self.assertEqual(key_b[0], "brest")
+        self.assertEqual(key_m[3], key_b[3])
+        self.assertEqual(key_m[1], "minsk")
+        self.assertEqual(key_b[1], "brest")
         self.assertNotEqual(key_m, key_b)
 
     def test_group_two_users_one_key(self) -> None:
@@ -138,6 +184,24 @@ class FetchKeyTests(unittest.TestCase):
         self.assertEqual(len(groups), 2)
         sizes = sorted(len(v) for v in groups.values())
         self.assertEqual(sizes, [1, 2])
+
+    def test_phones_vs_watches_different_keys(self) -> None:
+        phones = {
+            "keywords": ["iphone 15"],
+            "memory_volumes": ["256"],
+            "product_category": "phones",
+        }
+        watches = {
+            "keywords": ["apple watch series 7"],
+            "memory_volumes": ["256"],
+            "product_category": "watches",
+        }
+        key_p = fetch_key_for_user(phones)
+        key_w = fetch_key_for_user(watches)
+        self.assertEqual(key_p[0], "phones")
+        self.assertEqual(key_w[0], "watches")
+        self.assertEqual(key_w[3], ())
+        self.assertNotEqual(key_p, key_w)
 
 
 class CatalogFilterTests(unittest.TestCase):
@@ -239,6 +303,34 @@ class CatalogMatchSafetyTests(unittest.TestCase):
         ]
         matched = match_ads_for_user(user, ads, {})
         self.assertEqual([ad["title"] for ad in matched], ["iPhone 15 256"])
+
+    def test_macbook_selected_rejects_phone(self) -> None:
+        from user_matching import match_ads_for_user
+
+        user = {
+            "chat_id": 1,
+            "role": "regular",
+            "product_category": "laptops",
+            "keywords": ["macbook air m1"],
+            "memory_volumes": ["64"],
+            "max_price": 4000,
+        }
+        ads = [
+            {
+                "title": "MacBook Air M1 8/256",
+                "summary": "",
+                "price": 1200,
+                "company_ad": False,
+            },
+            {
+                "title": "iPhone 15 256",
+                "summary": "",
+                "price": 800,
+                "company_ad": False,
+            },
+        ]
+        matched = match_ads_for_user(user, ads, {})
+        self.assertEqual([ad["title"] for ad in matched], ["MacBook Air M1 8/256"])
 
 
 class NormalizeListingTests(unittest.TestCase):

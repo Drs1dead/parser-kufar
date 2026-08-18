@@ -22,6 +22,11 @@ from config import (
     VIP_SUBSCRIPTION_DAYS,
 )
 from kufar_catalog import CITY_RGN, DEFAULT_CITY, normalize_city
+from product_catalog import (
+    DEFAULT_CATEGORY,
+    DEVICE_CATALOG_SET,
+    normalize_category,
+)
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +82,7 @@ def _generate_referral_code() -> str:
 _USER_SELECT = (
     "chat_id, active, role, vip_until, max_price, keywords, sent_count, created_at, "
     "vip_feed_mode, username, memory_volumes, referral_code, referred_by, "
-    "poll_last_vip, poll_last_regular, city"
+    "poll_last_vip, poll_last_regular, city, product_category"
 )
 
 def _row_to_user(row: tuple) -> dict:
@@ -98,6 +103,7 @@ def _row_to_user(row: tuple) -> dict:
         "poll_last_vip": int(row[13] or 0) if len(row) > 13 else 0,
         "poll_last_regular": int(row[14] or 0) if len(row) > 14 else 0,
         "city": normalize_city(row[15] if len(row) > 15 else None),
+        "product_category": normalize_category(row[16] if len(row) > 16 else None),
     }
 
 
@@ -216,7 +222,8 @@ def init_db() -> None:
             keywords   TEXT    NOT NULL,
             sent_count INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
-            city       TEXT    NOT NULL DEFAULT 'minsk'
+            city       TEXT    NOT NULL DEFAULT 'minsk',
+            product_category TEXT NOT NULL DEFAULT 'phones'
         );
 
         CREATE TABLE IF NOT EXISTS seen_ads (
@@ -301,6 +308,11 @@ def init_db() -> None:
         _execute(
             f"ALTER TABLE users ADD COLUMN city TEXT NOT NULL DEFAULT '{DEFAULT_CITY}'"
         )
+    cols = _table_columns("users")
+    if "product_category" not in cols:
+        _execute(
+            f"ALTER TABLE users ADD COLUMN product_category TEXT NOT NULL DEFAULT '{DEFAULT_CATEGORY}'"
+        )
     _executescript(
         """
         CREATE TABLE IF NOT EXISTS referrals (
@@ -335,6 +347,10 @@ def init_db() -> None:
             seen_deleted,
             SEEN_ADS_RETENTION_DAYS,
         )
+    stale = prune_unknown_market_prices()
+    if stale:
+        log.info("market_prices pruned unknown models deleted=%s", stale)
+    checkpoint_wal()
 
 
 def _backfill_referral_codes() -> None:
@@ -368,8 +384,9 @@ def add_user(chat_id: int, *, username: str | None = None) -> bool:
         ref_code = _generate_referral_code()
         _execute(
             "INSERT INTO users (chat_id, active, role, vip_until, max_price, keywords, "
-            "created_at, vip_feed_mode, username, memory_volumes, referral_code, city) "
-            "VALUES (?, 1, 'regular', 0, ?, ?, ?, 'normal', ?, ?, ?, ?)",
+            "created_at, vip_feed_mode, username, memory_volumes, referral_code, city, "
+            "product_category) "
+            "VALUES (?, 1, 'regular', 0, ?, ?, ?, 'normal', ?, ?, ?, ?, ?)",
             (
                 chat_id,
                 DEFAULT_MAX_PRICE,
@@ -379,6 +396,7 @@ def add_user(chat_id: int, *, username: str | None = None) -> bool:
                 _memory_csv(list(DEFAULT_MEMORY_VOLUMES)),
                 ref_code,
                 DEFAULT_CITY,
+                DEFAULT_CATEGORY,
             ),
         )
         return True
@@ -508,6 +526,21 @@ def update_city(chat_id: int, city: str) -> str:
         row = cur.fetchone()
         return normalize_city(row[0] if row else None)
     _execute("UPDATE users SET city = ? WHERE chat_id = ?", (slug, chat_id))
+    return slug
+
+
+def update_product_category(chat_id: int, category: str, *, reset_keywords: bool = True) -> str:
+    slug = normalize_category(category)
+    if reset_keywords:
+        _execute(
+            "UPDATE users SET product_category = ?, keywords = '' WHERE chat_id = ?",
+            (slug, chat_id),
+        )
+    else:
+        _execute(
+            "UPDATE users SET product_category = ? WHERE chat_id = ?",
+            (slug, chat_id),
+        )
     return slug
 
 
@@ -685,6 +718,18 @@ def prune_price_tables(retention_days: int | None = None) -> tuple[int, int]:
     deleted_m = cur_m.rowcount if cur_m.rowcount is not None else 0
     deleted_s = cur_s.rowcount if cur_s.rowcount is not None else 0
     return deleted_m, deleted_s
+
+
+def prune_unknown_market_prices() -> int:
+    """Цены по моделям, которых больше нет в каталоге."""
+    if not DEVICE_CATALOG_SET:
+        return 0
+    placeholders = ",".join("?" for _ in DEVICE_CATALOG_SET)
+    cur = _execute(
+        f"DELETE FROM market_prices WHERE device_key NOT IN ({placeholders})",
+        tuple(DEVICE_CATALOG_SET),
+    )
+    return cur.rowcount if cur.rowcount is not None else 0
 
 
 def avg_market_price(device_key: str) -> int | None:
@@ -877,12 +922,12 @@ def _regular_defaults_sql_values() -> tuple:
 
 
 def revoke_vip(chat_id: int) -> None:
-    max_price, keywords, memory = _regular_defaults_sql_values()
+    max_price, _keywords, memory = _regular_defaults_sql_values()
     _execute(
         "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
-        "max_price = ?, keywords = ?, memory_volumes = ? "
+        "max_price = ?, memory_volumes = ? "
         "WHERE chat_id = ?",
-        (max_price, keywords, memory, chat_id),
+        (max_price, memory, chat_id),
     )
 
 

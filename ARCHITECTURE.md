@@ -7,13 +7,14 @@ main.py              # Запуск: Telegram polling + фоновый poller
 poller.py            # Цикл: Kufar → фильтры → отправка
 user_matching.py     # Какие объявления подходят пользователю
 kufar_fetch.py       # Запросы к API Kufar
-kufar_catalog.py     # Фасеты cat/phm/ppm/ot/rgn
+kufar_catalog.py     # Фасеты cat/phm/ppm/ot/rgn по категории
+product_catalog.py   # Категории и списки моделей
 filters.py           # Правила отбора объявлений
 db.py                # SQLite
 config.py            # Настройки из .env
 bot_ui.py            # Тексты и клавиатуры меню
 formatter.py         # Формат карточки объявления
-goods_tree.py        # Каталог Apple / Samsung
+goods_tree.py        # Линейки внутри категории
 
 handlers/
   __init__.py        # Собирает все роутеры
@@ -28,8 +29,8 @@ handlers/
 
 ## Поток рассылки
 
-1. `poller` берёт due-пользователей. При `KUFAR_USE_CATALOG` группирует их по ключу `город + модели + память` (город из профиля) и качает Kufar **один раз на ключ** (`cat=17010`, `phm`/`ppm`, `ot=1`). Текстовый `query` не используем: на Kufar это полнотекст, а не фильтр модели.
-2. Для каждого due — `match_ads_for_user` по батчу его ключа. При catalog: без `smart_filtering` (кроме VIP «идеальные»), магазины (`company_ad`) и тонкий антихлам в заголовке; модель и память ещё раз проверяются локально.
+1. `poller` берёт due-пользователей. При `KUFAR_USE_CATALOG` группирует их по ключу `категория + город + модели + память` (память только у смартфонов) и качает Kufar **один раз на ключ**. Текстовый `query` не используем: на Kufar это полнотекст, а не фильтр модели.
+2. Для каждого due — `match_ads_for_user` по батчу его ключа. При catalog: без `smart_filtering` (кроме VIP «идеальные»), магазины (`company_ad`) и тонкий антихлам в заголовке; модель (и память у смартфонов) ещё раз проверяются локально.
 3. Новые объявления отправляются в Telegram (`formatter.format_ad`).
 
 Фасеты: [`kufar_catalog.py`](kufar_catalog.py). Старый текстовый fetch (`KUFAR_QUERIES`) — если `KUFAR_USE_CATALOG=false`.
@@ -55,16 +56,16 @@ handlers/
 
 | Кнопка | callback | Файл |
 |--------|----------|------|
-| Товары | `nav:goods` | `nav.py` → `_goods_mobile_brands_*` из `goods_ui.py` |
-| Бренды (повторно) | `goods:h` / `goods:m` | `goods.py` → тот же экран Apple / Samsung |
-| Apple / Samsung | `goods:a` / `goods:s` | `goods.py` |
-| Модель в линейке | `gt:` / `st:` / `kw:` | `goods.py` |
+| Товары | `nav:goods` | `nav.py` → категории |
+| Категория | `gc:` / `gx:` | `goods.py` |
+| Смартфоны | `goods:m` / `goods:a` / `goods:s` | `goods.py` |
+| Модель в линейке | `gt:` / `st:` / `lt:` / `pt:` / `wt:` | `goods.py` |
 
 В `goods.py` функции из `goods_ui` импортируются **явно** (не `import *` — иначе имена с `_` не подхватываются).
 
 ## Скорость
 
-- При `KUFAR_USE_CATALOG` — один fetch на уникальный ключ (город+модели+память), не на пользователя; до `KUFAR_MAX_PAGES` страниц на запрос (cursor).
-- Разные интервалы опроса для VIP и обычных аккаунтов.
+- При `KUFAR_USE_CATALOG` — один fetch на уникальный ключ (категория+город+модели+память), не на пользователя; до `KUFAR_MAX_PAGES` страниц на запрос (cursor).
+- VIP опрашивается отдельно (~30 с), обычные — реже (~7 мин); тик poller не длиннее VIP и не ждёт fetch обычных.
 - Кэш `market_prices` в памяти на один проход poller; в БД — только цены за `PRICE_DATA_RETENTION_DAYS` (по умолчанию 14), старые строки prune при старте и в poller.
 - Минимум лишних запросов к БД в хендлерах (один `get_user` после обновления username).

@@ -5,6 +5,8 @@ import asyncio
 import logging
 import time
 
+import aiohttp
+
 from aiogram import Bot
 from aiogram.enums import ParseMode
 from aiogram.exceptions import (
@@ -25,6 +27,7 @@ from config import (
 )
 from db import (
     avg_market_price,
+    checkpoint_wal,
     expire_all_vip,
     get_active_users,
     has_seen_any,
@@ -32,6 +35,7 @@ from db import (
     mark_seen,
     prune_price_tables,
     prune_seen_ads,
+    prune_unknown_market_prices,
     save_market_prices,
     seen_links_for,
     set_active,
@@ -41,8 +45,14 @@ from filters import ad_device_key, is_whole_phone_listing, matches_filters
 from filters import ideal_passes
 from formatter import format_ad, truncate_ad_caption
 from kufar_catalog import FetchKey, fetch_key_for_user, group_users_by_fetch_key
-from kufar_fetch import enrich_ads_descriptions, fetch_ads, fetch_ads_for_key
 from logging_setup import log_exception
+from kufar_fetch import (
+    DEFAULT_HEADERS,
+    enrich_ads_descriptions,
+    fetch_ads,
+    fetch_ads_for_key,
+)
+from product_catalog import is_phones_category
 from user_matching import VIP_SPECIAL_MAX_PRICE, match_ads_for_user
 
 log = logging.getLogger("kufar_bot.poller")
@@ -87,15 +97,57 @@ def _ingest_market_prices_from_ads(ads: list[dict]) -> None:
     save_market_prices(rows)
 
 
-def _should_process_user(user: dict) -> bool:
-    is_vip = user.get("role") == "vip"
-    prev = int(user.get("poll_last_vip") or 0) if is_vip else int(
-        user.get("poll_last_regular") or 0
-    )
+def _is_vip_user(user: dict) -> bool:
+    return user.get("role") == "vip"
+
+
+def _user_interval(user: dict) -> float:
+    return float(VIP_CHECK_INTERVAL if _is_vip_user(user) else REGULAR_CHECK_INTERVAL)
+
+
+def _user_last_run(user: dict) -> float:
+    if _is_vip_user(user):
+        return float(user.get("poll_last_vip") or 0)
+    return float(user.get("poll_last_regular") or 0)
+
+
+def _seconds_until_due(user: dict, now: float) -> float:
+    prev = _user_last_run(user)
     if prev <= 0:
-        return True
-    interval = VIP_CHECK_INTERVAL if is_vip else REGULAR_CHECK_INTERVAL
-    return (time.time() - prev) >= interval
+        return 0.0
+    return max(0.0, _user_interval(user) - (now - prev))
+
+
+def _should_process_user(user: dict, *, now: float | None = None) -> bool:
+    t = time.time() if now is None else now
+    return _seconds_until_due(user, t) <= 0.0
+
+
+def _poll_sleep_seconds(
+    users: list[dict],
+    now: float,
+    *,
+    tick: float | None = None,
+) -> float:
+    """Сколько спать до следующего прохода: не дольше тика, не позже due."""
+    cap = float(CHECK_INTERVAL if tick is None else tick)
+    cap = max(0.05, cap)
+    if not users:
+        return cap
+    soonest = min(_seconds_until_due(user, now) for user in users)
+    if soonest <= 0:
+        return 0.05
+    return min(cap, soonest)
+
+
+def _mark_user_polled(user: dict) -> None:
+    is_vip = _is_vip_user(user)
+    set_poll_last_run(user["chat_id"], is_vip=is_vip)
+    stamped = int(time.time())
+    if is_vip:
+        user["poll_last_vip"] = stamped
+    else:
+        user["poll_last_regular"] = stamped
 
 
 async def _notify_vip_expired(bot: Bot, chat_ids: list[int]) -> None:
@@ -225,7 +277,9 @@ async def _process_user(
             link = ad.get("link")
             if not link or link in already_seen:
                 continue
-            if ideal_passes(ad, stage="strict"):
+            if ideal_passes(
+                ad, stage="strict", skip_battery=not is_phones_category(user.get("product_category"))
+            ):
                 strict_ok.append(ad)
             else:
                 mark_seen(chat_id, link)
@@ -302,9 +356,16 @@ async def _fetch_catalog_groups(
     keys = list(groups.keys())
     if not keys:
         return {}, []
-    batches = await asyncio.gather(
-        *(fetch_ads_for_key(city, models, memories) for city, models, memories in keys)
-    )
+    connector = aiohttp.TCPConnector(limit=8)
+    async with aiohttp.ClientSession(
+        headers=DEFAULT_HEADERS, connector=connector
+    ) as session:
+        batches = await asyncio.gather(
+            *(
+                fetch_ads_for_key(category, city, models, memories, session=session)
+                for category, city, models, memories in keys
+            )
+        )
     ads_by_key: dict[FetchKey, list[dict]] = {}
     merged: list[dict] = []
     seen_links: set[str] = set()
@@ -319,6 +380,55 @@ async def _fetch_catalog_groups(
     return ads_by_key, merged
 
 
+async def _dispatch_due(
+    bot: Bot,
+    due: list[dict],
+    *,
+    compare_catalog: bool = False,
+) -> None:
+    if not due:
+        return
+    if KUFAR_USE_CATALOG:
+        groups = group_users_by_fetch_key(due)
+        ads_by_key, merged = await _fetch_catalog_groups(groups)
+        if compare_catalog and KUFAR_CATALOG_COMPARE:
+            text_ads = await fetch_ads()
+            log.info(
+                "kufar catalog compare catalog=%d text=%d keys=%d",
+                len(merged),
+                len(text_ads),
+                len(groups),
+            )
+        await asyncio.to_thread(_ingest_market_prices_from_ads, merged)
+        market_cache: dict[str, int | None] = {}
+        log.info(
+            "poll catalog ads=%d keys=%d due=%d",
+            len(merged),
+            len(groups),
+            len(due),
+        )
+        for user in due:
+            try:
+                key = fetch_key_for_user(user)
+                ads = ads_by_key.get(key) or []
+                await _process_user(bot, user, ads, market_cache)
+                _mark_user_polled(user)
+            except Exception:
+                log_exception(log, "poll user failed chat_id=%s", user["chat_id"])
+        return
+
+    ads = await fetch_ads()
+    await asyncio.to_thread(_ingest_market_prices_from_ads, ads)
+    market_cache = {}
+    log.info("poll fetched ads=%d due=%d", len(ads), len(due))
+    for user in due:
+        try:
+            await _process_user(bot, user, ads, market_cache)
+            _mark_user_polled(user)
+        except Exception:
+            log_exception(log, "poll user failed chat_id=%s", user["chat_id"])
+
+
 async def poller(bot: Bot) -> None:
     # Тяжёлые операции (expire/prune) не обязательно делать каждый цикл.
     # Это снижает нагрузку на SQLite при большом количестве пользователей.
@@ -328,6 +438,7 @@ async def poller(bot: Bot) -> None:
     prune_every_s = max(600.0, CHECK_INTERVAL * 10)  # примерно раз в 10 минут
 
     while True:
+        users: list[dict] = []
         try:
             now = time.time()
             if now - last_expire_at >= expire_every_s:
@@ -345,59 +456,29 @@ async def poller(bot: Bot) -> None:
                 seen_pruned = await asyncio.to_thread(prune_seen_ads)
                 if seen_pruned:
                     log.debug("seen_ads pruned deleted=%s", seen_pruned)
+                stale = await asyncio.to_thread(prune_unknown_market_prices)
+                if stale:
+                    log.debug("market_prices unknown models deleted=%s", stale)
+                await asyncio.to_thread(checkpoint_wal)
                 last_prune_at = now
 
             users = await asyncio.to_thread(get_active_users, expire_vip=False)
-            due = [u for u in users if _should_process_user(u)]
-            if not due:
+            now = time.time()
+            vip_due = [
+                u for u in users if _is_vip_user(u) and _should_process_user(u, now=now)
+            ]
+            regular_due = [
+                u
+                for u in users
+                if not _is_vip_user(u) and _should_process_user(u, now=now)
+            ]
+            if not vip_due and not regular_due:
                 log.debug("poll skip — no due subscribers")
-            elif KUFAR_USE_CATALOG:
-                groups = group_users_by_fetch_key(due)
-                ads_by_key, merged = await _fetch_catalog_groups(groups)
-                if KUFAR_CATALOG_COMPARE:
-                    text_ads = await fetch_ads()
-                    log.info(
-                        "kufar catalog compare catalog=%d text=%d keys=%d",
-                        len(merged),
-                        len(text_ads),
-                        len(groups),
-                    )
-                await asyncio.to_thread(_ingest_market_prices_from_ads, merged)
-                market_cache: dict[str, int | None] = {}
-                log.debug(
-                    "poll catalog ads=%d keys=%d due=%d subscribers=%d",
-                    len(merged),
-                    len(groups),
-                    len(due),
-                    len(users),
-                )
-                for user in due:
-                    try:
-                        key = fetch_key_for_user(user)
-                        ads = ads_by_key.get(key) or []
-                        await _process_user(bot, user, ads, market_cache)
-                        set_poll_last_run(
-                            user["chat_id"],
-                            is_vip=user.get("role") == "vip",
-                        )
-                    except Exception:
-                        log_exception(log, "poll user failed chat_id=%s", user["chat_id"])
             else:
-                ads = await fetch_ads()
-                await asyncio.to_thread(_ingest_market_prices_from_ads, ads)
-                market_cache = {}
-                log.debug("poll fetched ads=%d due=%d subscribers=%d", len(ads), len(due), len(users))
-
-                for user in due:
-                    try:
-                        await _process_user(bot, user, ads, market_cache)
-                        set_poll_last_run(
-                            user["chat_id"],
-                            is_vip=user.get("role") == "vip",
-                        )
-                    except Exception:
-                        log_exception(log, "poll user failed chat_id=%s", user["chat_id"])
+                # VIP отдельно: не ждёт fetch ключей обычных пользователей.
+                await _dispatch_due(bot, vip_due, compare_catalog=True)
+                await _dispatch_due(bot, regular_due)
         except Exception:
             log_exception(log, "poll cycle failed")
 
-        await asyncio.sleep(CHECK_INTERVAL)
+        await asyncio.sleep(_poll_sleep_seconds(users, time.time()))

@@ -75,6 +75,9 @@ def _build_summary(ad_params: list[dict]) -> str:
         (("phones_model", "phone_model"), "Модель"),
         (("phablet_phones_memory", "phone_memory"), "Память"),
         (("phones_color", "phone_color"), "Цвет"),
+        (("computers_laptop_processor",), "Процессор"),
+        (("phablet_tablet_brand",), "Планшет"),
+        (("phablet_smart_watches_brand",), "Часы"),
     ):
         label = _param_label(ad_params, *keys)
         if label:
@@ -364,35 +367,47 @@ def _catalog_request_params(facets: dict[str, str]) -> dict[str, str]:
 
 
 async def fetch_ads_for_key(
+    category: str,
     city: str,
     models: list[str] | tuple[str, ...],
     memories: list[str] | tuple[str, ...],
+    *,
+    session: aiohttp.ClientSession | None = None,
 ) -> list[dict]:
-    """Листинг по ключу: город + модели + память (частники, категория телефоны)."""
-    facet_sets = catalog_search_params(city, models, memories)
+    """Листинг по ключу: категория + город + модели (+ память у смартфонов)."""
+    facet_sets = catalog_search_params(
+        city, models, memories, category=category
+    )
     if not facet_sets:
         return []
-    connector = aiohttp.TCPConnector(limit=8)
-    async with aiohttp.ClientSession(
-        headers=DEFAULT_HEADERS, connector=connector
-    ) as session:
+
+    async def _run(sess: aiohttp.ClientSession) -> list[dict]:
         batches = await asyncio.gather(
             *(
-                _fetch_search_params(session, _catalog_request_params(facets))
+                _fetch_search_params(sess, _catalog_request_params(facets))
                 for facets in facet_sets
             )
         )
-    raw_ads: list[dict] = []
-    for batch in batches:
-        raw_ads.extend(batch)
-    ads = _normalize_raw_ads(raw_ads)
-    log.debug(
-        "kufar catalog city=%s models=%s mem=%s raw=%d normalized=%d requests=%d",
-        city,
-        len(models),
-        list(memories),
-        len(raw_ads),
-        len(ads),
-        len(facet_sets),
-    )
-    return ads
+        raw_ads: list[dict] = []
+        for batch in batches:
+            raw_ads.extend(batch)
+        ads = _normalize_raw_ads(raw_ads)
+        log.debug(
+            "kufar catalog cat=%s city=%s models=%s mem=%s raw=%d normalized=%d requests=%d",
+            category,
+            city,
+            len(models),
+            list(memories),
+            len(raw_ads),
+            len(ads),
+            len(facet_sets),
+        )
+        return ads
+
+    if session is not None:
+        return await _run(session)
+    connector = aiohttp.TCPConnector(limit=8)
+    async with aiohttp.ClientSession(
+        headers=DEFAULT_HEADERS, connector=connector
+    ) as own:
+        return await _run(own)

@@ -65,6 +65,25 @@ class Sprint2Tests(unittest.TestCase):
         links = {row[0] for row in cur.fetchall()}
         self.assertEqual(links, {"https://kufar.by/new"})
 
+    def test_new_user_empty_keywords_phones_category(self) -> None:
+        db.add_user(7, username="u")
+        user = db.get_user(7)
+        assert user is not None
+        self.assertEqual(user["product_category"], "phones")
+        self.assertEqual(user["keywords"], [])
+
+    def test_update_product_category_resets_keywords(self) -> None:
+        db.add_user(8, username="u")
+        db.update_keywords(8, ["iphone 15", "iphone 16"])
+        user = db.get_user(8)
+        assert user is not None
+        self.assertEqual(user["keywords"], ["iphone 15", "iphone 16"])
+        db.update_product_category(8, "watches")
+        user = db.get_user(8)
+        assert user is not None
+        self.assertEqual(user["product_category"], "watches")
+        self.assertEqual(user["keywords"], [])
+
     def test_poll_last_run_columns(self) -> None:
         db.add_user(42, username="u")
         db.set_poll_last_run(42, is_vip=True)

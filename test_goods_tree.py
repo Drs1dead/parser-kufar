@@ -4,6 +4,7 @@ import unittest
 from config import DEVICE_CATALOG
 from goods_tree import (
     APPLE_LINES,
+    LAPTOP_LINES,
     LINE_BASIC,
     LINE_MAX,
     LINE_PRO,
@@ -13,9 +14,12 @@ from goods_tree import (
     SAMSUNG_LINE_PLUS,
     SAMSUNG_LINE_ULTRA,
     SAMSUNG_LINES,
+    TABLET_LINES,
+    WATCH_LINES,
     line_slug_for_catalog_entry,
     samsung_line_slug_for_catalog_entry,
 )
+from product_catalog import PHONE_MODELS
 
 
 class GoodsTreeTests(unittest.TestCase):
@@ -31,7 +35,12 @@ class GoodsTreeTests(unittest.TestCase):
             SAMSUNG_LINE_FOLD,
         ):
             union.update(SAMSUNG_LINES[slug])
-        self.assertEqual(union, set(DEVICE_CATALOG))
+        self.assertEqual(union, set(PHONE_MODELS))
+        all_models = set(union)
+        for lines in (LAPTOP_LINES, TABLET_LINES, WATCH_LINES):
+            for models in lines.values():
+                all_models.update(models)
+        self.assertEqual(all_models, set(DEVICE_CATALOG))
 
     def test_partitions_disjoint(self) -> None:
         a, p, m = (

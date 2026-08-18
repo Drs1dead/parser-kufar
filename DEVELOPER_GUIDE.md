@@ -171,9 +171,9 @@ python main.py
 | `TOKEN`                        | —                | Токен Telegram-бота                         |
 | `ADMIN_IDS`                    | —                | ID админов через запятую                    |
 | `DB_PATH`                      | авто             | Путь к SQLite                               |
-| `CHECK_INTERVAL`               | 60               | Пауза между **циклами** poller (сек)        |
-| `VIP_CHECK_INTERVAL`           | 60               | Мин. интервал рассылки для VIP-пользователя |
-| `REGULAR_CHECK_INTERVAL`       | 600              | Мин. интервал для обычного                  |
+| `CHECK_INTERVAL`               | 10               | Тик poller (сек), не длиннее VIP            |
+| `VIP_CHECK_INTERVAL`           | 30               | Мин. интервал рассылки для VIP              |
+| `REGULAR_CHECK_INTERVAL`       | 420              | Мин. интервал для обычного (~7 мин)         |
 | `FIRST_RUN_LIMIT`              | 3                | Сколько объявлений при первом включении     |
 | `KUFAR_QUERY`                  | iphone, samsung… | Поисковые запросы через запятую             |
 | `KUFAR_REGION`                 | 7                | Регион Kufar                                |
@@ -289,19 +289,14 @@ python main.py
 
 Файл: `**poller.py**`.
 
-### Цикл poller (каждые `CHECK_INTERVAL` сек)
+### Цикл poller (тик `CHECK_INTERVAL`, VIP и обычные раздельно)
 
 ```
-expire_all_vip → уведомления истёкшим
-prune_price_tables, prune_seen_ads
+expire_all_vip / prune (реже, чем тик)
 users = get_active_users()
-ads = fetch_ads(with_description=False)
-_ingest_market_prices_from_ads(ads)
-для каждого user:
-    если не прошёл VIP/regular интервал → skip
-    _process_user(bot, user, ads, market_cache)
-    set_poll_last_run(...)
-sleep(CHECK_INTERVAL)
+VIP due → fetch только их ключи → _process_user → mark polled
+обычные due → свой fetch
+sleep(min(CHECK_INTERVAL, время до следующего due))
 ```
 
 ### Интервал на пользователя
@@ -541,7 +536,7 @@ nav → goods → admin → start
 | ----------------------- | ---------------------------------- | ---------------------------------------- |
 | Моделей в keywords      | до 5                               | больше (`goods_ui._max_keyword_slots`)   |
 | Память                  | один объём                         | несколько; нельзя снять последний        |
-| Интервал рассылки       | `REGULAR_CHECK_INTERVAL` (~10 мин) | `VIP_CHECK_INTERVAL` (~1 мин)            |
+| Интервал рассылки       | `REGULAR_CHECK_INTERVAL` (~7 мин) | `VIP_CHECK_INTERVAL` (~30 с)             |
 | Фильтры                 | basic + цена/модель/память         | + smart (жёсткий отбор)                  |
 | Потоки рассылки         | только normal                      | normal / below_market / exchange / ideal |
 | Средняя цена в карточке | нет                                | да                                       |

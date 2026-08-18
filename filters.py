@@ -342,6 +342,29 @@ def _catalog_match_terms(device: str) -> tuple[str, ...]:
             terms.add(f"galaxy {fold_short}")
             terms.add(short.replace(" ", ""))
             terms.add(fold_short.replace(" ", ""))
+    elif key.startswith("macbook "):
+        terms.add(key.removeprefix("macbook ").strip())
+        terms.add(key.replace("macbook ", "mac book "))
+    elif key.startswith("ipad "):
+        terms.add(key.replace("ipad ", "айпад "))
+        if key.startswith("ipad pro 12.9"):
+            terms.add("ipad pro 12.9")
+            terms.add("ipad pro 12,9")
+            terms.add("ipad pro 12 9")
+    elif key.startswith("apple watch "):
+        rest = key.removeprefix("apple watch ").strip()
+        terms.add(f"watch {rest}")
+        terms.add(rest)
+        if rest.startswith("series "):
+            num = rest.removeprefix("series ").strip()
+            terms.add(f"apple watch {num}")
+            terms.add(f"watch {num}")
+            terms.add(f"watch s{num}")
+            terms.add(f"series {num}")
+        if rest == "se":
+            terms.add("watch se")
+        if rest.startswith("ultra"):
+            terms.add(rest)
     return tuple(sorted(terms, key=len, reverse=True))
 
 
@@ -612,7 +635,9 @@ def _ideal_text_has_term(text: str, terms: tuple[str, ...]) -> str | None:
     return None
 
 
-def ideal_reject_reason(ad: dict, *, require_full_text: bool) -> str | None:
+def ideal_reject_reason(
+    ad: dict, *, require_full_text: bool, skip_battery: bool = False
+) -> str | None:
     """
     None — лот подходит под поток «Идеальные» на данной стадии.
     require_full_text=False: состояние + заголовок; True: + описание, АКБ, полный текст.
@@ -641,6 +666,9 @@ def ideal_reject_reason(ad: dict, *, require_full_text: bool) -> str | None:
     if hit:
         return REJECT_IDEAL_DEFECT_TERM
 
+    if skip_battery:
+        return None
+
     percents = parse_battery_percents(full_text)
     if not percents:
         if _ideal_label_is_good(_ideal_condition_label(ad)) and _ideal_positive_condition_hint(
@@ -653,9 +681,14 @@ def ideal_reject_reason(ad: dict, *, require_full_text: bool) -> str | None:
     return None
 
 
-def ideal_passes(ad: dict, *, stage: str) -> bool:
+def ideal_passes(ad: dict, *, stage: str, skip_battery: bool = False) -> bool:
     require_full = stage == "strict"
-    return ideal_reject_reason(ad, require_full_text=require_full) is None
+    return (
+        ideal_reject_reason(
+            ad, require_full_text=require_full, skip_battery=skip_battery
+        )
+        is None
+    )
 
 
 def log_filter_reject(

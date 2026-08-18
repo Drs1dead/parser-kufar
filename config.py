@@ -4,6 +4,8 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
+from product_catalog import DEFAULT_KEYWORDS, DEVICE_CATALOG
+
 load_dotenv()
 
 # Часовой пояс для дат в сообщениях (Минск = UTC+3, как МСК).
@@ -36,9 +38,11 @@ SQLITE_SYNCHRONOUS = _sqlite_sync if _sqlite_sync in ("OFF", "NORMAL", "FULL", "
 KUFAR_FETCH_RETRIES = max(1, int(os.getenv("KUFAR_FETCH_RETRIES", "3")))
 KUFAR_FETCH_RETRY_DELAY = float(os.getenv("KUFAR_FETCH_RETRY_DELAY", "2"))
 
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
-REGULAR_CHECK_INTERVAL = int(os.getenv("REGULAR_CHECK_INTERVAL", "600"))
-VIP_CHECK_INTERVAL = int(os.getenv("VIP_CHECK_INTERVAL", "60"))
+VIP_CHECK_INTERVAL = max(1, int(os.getenv("VIP_CHECK_INTERVAL", "30")))
+REGULAR_CHECK_INTERVAL = max(1, int(os.getenv("REGULAR_CHECK_INTERVAL", "420")))
+# Тик poller: не длиннее VIP, иначе VIP не попадёт в свой интервал.
+_raw_check = int(os.getenv("CHECK_INTERVAL", "10"))
+CHECK_INTERVAL = max(1, min(_raw_check, VIP_CHECK_INTERVAL))
 
 FIRST_RUN_LIMIT = int(os.getenv("FIRST_RUN_LIMIT", "3"))
 VIP_SUBSCRIPTION_DAYS = int(os.getenv("VIP_SUBSCRIPTION_DAYS", "30"))
@@ -103,80 +107,6 @@ MAX_PRICE_PRESETS: tuple[int, ...] = tuple(
     for x in os.getenv("MAX_PRICE_PRESETS", "300,500,800,1000,1500,2000,3000,5000").split(",")
     if x.strip().isdigit()
 ) or (300, 500, 800, 1000, 1500, 2000, 3000, 5000)
-
-DEFAULT_KEYWORDS = [
-    "iphone x",
-    "iphone xs",
-    "iphone xs max",
-    "iphone xr",
-    "iphone 11",
-]
-DEVICE_CATALOG = [
-    "iphone se",
-    "iphone x",
-    "iphone xs",
-    "iphone xs max",
-    "iphone xr",
-    "iphone 11",
-    "iphone 11 pro",
-    "iphone 11 pro max",
-    "iphone 12",
-    "iphone 12 mini",
-    "iphone 12 pro",
-    "iphone 12 pro max",
-    "iphone 13",
-    "iphone 13 mini",
-    "iphone 13 pro",
-    "iphone 13 pro max",
-    "iphone 14",
-    "iphone 14 plus",
-    "iphone 14 pro",
-    "iphone 14 pro max",
-    "iphone 15",
-    "iphone 15 plus",
-    "iphone 15 pro",
-    "iphone 15 pro max",
-    "iphone 16",
-    "iphone 16 plus",
-    "iphone 16 pro",
-    "iphone 16 pro max",
-    "iphone 17",
-    "iphone 17 pro",
-    "iphone 17 pro max",
-    "samsung galaxy s20",
-    "samsung galaxy s20 plus",
-    "samsung galaxy s20 ultra",
-    "samsung galaxy s21",
-    "samsung galaxy s21 plus",
-    "samsung galaxy s21 ultra",
-    "samsung galaxy s22",
-    "samsung galaxy s22 plus",
-    "samsung galaxy s22 ultra",
-    "samsung galaxy s23",
-    "samsung galaxy s23 plus",
-    "samsung galaxy s23 ultra",
-    "samsung galaxy s24",
-    "samsung galaxy s24 plus",
-    "samsung galaxy s24 ultra",
-    "samsung galaxy s25",
-    "samsung galaxy s25 plus",
-    "samsung galaxy s25 ultra",
-    "samsung galaxy z flip",
-    "samsung galaxy z flip 5g",
-    "samsung galaxy z flip 3",
-    "samsung galaxy z flip 4",
-    "samsung galaxy z flip 5",
-    "samsung galaxy z flip 6",
-    "samsung galaxy z flip 7",
-    "samsung galaxy z flip 7 fe",
-    "samsung galaxy z fold",
-    "samsung galaxy z fold 2",
-    "samsung galaxy z fold 3",
-    "samsung galaxy z fold 4",
-    "samsung galaxy z fold 5",
-    "samsung galaxy z fold 6",
-    "samsung galaxy z fold 7",
-]
 
 # Стоп-слова по смыслу объявления: проверяются только в названии (subject),
 # чтобы «чехол в подарок» в описании не отсекало продажу телефона.

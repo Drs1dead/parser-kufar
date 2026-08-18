@@ -14,6 +14,7 @@ from filters import (
     log_filter_reject,
     matches_filters,
 )
+from product_catalog import is_phones_category
 
 # VIP-потоки «ниже рынка» / «обмен» — без лимита цены из профиля
 VIP_SPECIAL_MAX_PRICE = 99_999_999
@@ -33,6 +34,10 @@ def _basic_filtering_for(user: dict) -> bool:
     return user.get("role") != "vip"
 
 
+def _memory_filter_for(user: dict) -> bool:
+    return is_phones_category(user.get("product_category"))
+
+
 def _passes_base(ad: dict, user: dict, *, max_price: int, skip_new_phone: bool = False) -> bool:
     return matches_filters(
         ad,
@@ -42,7 +47,7 @@ def _passes_base(ad: dict, user: dict, *, max_price: int, skip_new_phone: bool =
         smart_filtering=_smart_filtering_for(user),
         basic_filtering=_basic_filtering_for(user),
         device_filter=True,
-        memory_filter=True,
+        memory_filter=_memory_filter_for(user),
         skip_new_phone=skip_new_phone,
         company_filter=KUFAR_USE_CATALOG,
         thin_junk=KUFAR_USE_CATALOG,
@@ -60,7 +65,7 @@ def _log_reject(ad: dict, user: dict, *, max_price: int, feed_mode: str) -> None
         smart_filtering=_smart_filtering_for(user),
         basic_filtering=_basic_filtering_for(user),
         device_filter=True,
-        memory_filter=True,
+        memory_filter=_memory_filter_for(user),
         company_filter=KUFAR_USE_CATALOG,
         thin_junk=KUFAR_USE_CATALOG,
     )
