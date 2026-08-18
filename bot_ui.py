@@ -21,6 +21,11 @@ GOODS_CRUMB = "📱 <b>Товары</b>"
 
 BOT_USERNAME: str = ""
 
+PRIVACY_POLICY_URL = "https://telegra.ph/POLITIKA-KONFIDENCIALNOSTI-08-12-99"
+TERMS_OF_SERVICE_URL = "https://telegra.ph/PUBLICHNAYA-OFERTA-08-12-15"
+SUPPORT_URL = "https://t.me/kufiBY"
+SUPPORT_HANDLE = "@KufiBY"
+
 HELP_TEXT = (
     "💡 <b>Как пользоваться ботом</b>\n\n"
     "Бот ищет объявления на <b>Kufar.by</b> и присылает подходящие вам в Telegram. "
@@ -37,7 +42,10 @@ HELP_TEXT = (
     "🔔 Включены — новые объявления в чат\n"
     "🔕 Пауза — временно ничего не присылать\n\n"
     "⭐ <b>VIP</b> — больше моделей, особые потоки, промокод, приглашение друзей\n\n"
-    "📰 Новости — <a href='https://t.me/kufiBY'>@KufiBY</a>"
+    "<b>Документы и поддержка</b>\n"
+    f"🔒 <a href='{PRIVACY_POLICY_URL}'>Политика конфиденциальности</a>\n"
+    f"📄 <a href='{TERMS_OF_SERVICE_URL}'>Пользовательское соглашение</a>\n"
+    f"💬 Поддержка и новости — <a href='{SUPPORT_URL}'>{SUPPORT_HANDLE}</a>"
 )
 
 
@@ -263,6 +271,15 @@ def vip_keyboard(user: dict | None) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=idl, callback_data="nav:vipf:ideal")]
         )
     rows.append([InlineKeyboardButton(text="🎟 Промокод", callback_data="nav:promo")])
+    rows.append(
+        [
+            InlineKeyboardButton(text="🔒 Политика", url=PRIVACY_POLICY_URL),
+            InlineKeyboardButton(text="📄 Оферта", url=TERMS_OF_SERVICE_URL),
+        ]
+    )
+    rows.append(
+        [InlineKeyboardButton(text=f"💬 Поддержка {SUPPORT_HANDLE}", url=SUPPORT_URL)]
+    )
     rows.append(back_row())
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
