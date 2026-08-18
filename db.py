@@ -173,6 +173,19 @@ def _execute(sql: str, params: tuple | list = ()) -> sqlite3.Cursor:
         return conn.execute(sql, params)
 
 
+def _executemany(sql: str, seq: list[tuple]) -> None:
+    if not seq:
+        return
+    with _db_lock:
+        conn.execute("BEGIN")
+        try:
+            conn.executemany(sql, seq)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
 def _executescript(script: str) -> None:
     with _db_lock:
         conn.executescript(script)
@@ -330,19 +343,18 @@ def _backfill_referral_codes() -> None:
 def update_user_username(chat_id: int, username: str | None) -> None:
     """Telegram @username без «@»; пусто — сброс. Без записи, если значение не изменилось."""
     new = _norm_username(username)
-    cur = _execute("SELECT username FROM users WHERE chat_id = ?", (chat_id,))
-    row = cur.fetchone()
-    if row is None:
-        return
-    if (row[0] or "") == new:
-        return
-    _execute("UPDATE users SET username = ? WHERE chat_id = ?", (new, chat_id))
+    _execute(
+        "UPDATE users SET username = ? WHERE chat_id = ? AND IFNULL(username, '') != ?",
+        (new, chat_id, new),
+    )
 
 
 def add_user(chat_id: int, *, username: str | None = None) -> bool:
     """Добавить пользователя или реактивировать. True если это новый юзер."""
     u = _norm_username(username)
-    cur = _execute("SELECT active FROM users WHERE chat_id = ?", (chat_id,))
+    cur = _execute(
+        "SELECT active, username FROM users WHERE chat_id = ?", (chat_id,)
+    )
     row = cur.fetchone()
     if row is None:
         ref_code = _generate_referral_code()
@@ -361,21 +373,17 @@ def add_user(chat_id: int, *, username: str | None = None) -> bool:
             ),
         )
         return True
-    if row[0] == 0:
+    active, old_username = row[0], (row[1] or "")
+    if active == 0:
         _execute(
             "UPDATE users SET active = 1, username = ? WHERE chat_id = ?",
             (u, chat_id),
         )
-    else:
-        cur = _execute(
-            "SELECT username FROM users WHERE chat_id = ?", (chat_id,)
+    elif old_username != u:
+        _execute(
+            "UPDATE users SET username = ? WHERE chat_id = ?",
+            (u, chat_id),
         )
-        old = (cur.fetchone() or ("",))[0] or ""
-        if old != u:
-            _execute(
-                "UPDATE users SET username = ? WHERE chat_id = ?",
-                (u, chat_id),
-            )
     return False
 
 
@@ -387,8 +395,6 @@ def set_active(chat_id: int, active: bool) -> None:
 
 
 def get_user(chat_id: int) -> Optional[dict]:
-    _expire_vip(chat_id)
-
     cur = _execute(
         f"SELECT {_USER_SELECT} FROM users WHERE chat_id = ?",
         (chat_id,),
@@ -397,7 +403,19 @@ def get_user(chat_id: int) -> Optional[dict]:
     if row is None:
         return None
     user = _row_to_user(row)
-    if user.get("role") != "vip" and len(user.get("memory_volumes") or []) > 1:
+    now = int(time.time())
+    if user.get("role") == "vip" and 0 < int(user.get("vip_until") or 0) < now:
+        memory = _vip_expiry_memory_sql()
+        _execute(
+            "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
+            "memory_volumes = ? WHERE chat_id = ?",
+            (memory, chat_id),
+        )
+        user["role"] = "regular"
+        user["vip_until"] = 0
+        user["vip_feed_mode"] = "normal"
+        user["memory_volumes"] = list(DEFAULT_MEMORY_VOLUMES)
+    elif user.get("role") != "vip" and len(user.get("memory_volumes") or []) > 1:
         norm = list(DEFAULT_MEMORY_VOLUMES)
         _execute(
             "UPDATE users SET memory_volumes = ? WHERE chat_id = ?",
@@ -606,9 +624,11 @@ def set_poll_last_run(chat_id: int, *, is_vip: bool) -> None:
         )
 
 
-def count_seen(chat_id: int) -> int:
-    cur = _execute("SELECT COUNT(*) FROM seen_ads WHERE chat_id = ?", (chat_id,))
-    return int(cur.fetchone()[0])
+def has_seen_any(chat_id: int) -> bool:
+    cur = _execute(
+        "SELECT 1 FROM seen_ads WHERE chat_id = ? LIMIT 1", (chat_id,)
+    )
+    return cur.fetchone() is not None
 
 
 def increment_sent(chat_id: int) -> None:
@@ -619,10 +639,17 @@ def increment_sent(chat_id: int) -> None:
 
 
 def save_market_price(link: str, device_key: str, price: int) -> None:
-    _execute(
+    save_market_prices([(link, device_key, price)])
+
+
+def save_market_prices(rows: list[tuple[str, str, int]]) -> None:
+    if not rows:
+        return
+    now = int(time.time())
+    _executemany(
         "INSERT OR IGNORE INTO market_prices (link, device_key, price, sent_at) "
         "VALUES (?, ?, ?, ?)",
-        (link, device_key, price, int(time.time())),
+        [(link, device_key, price, now) for link, device_key, price in rows],
     )
 
 
@@ -842,25 +869,6 @@ def revoke_vip(chat_id: int) -> None:
 
 def _vip_expiry_memory_sql() -> str:
     return _memory_csv(list(DEFAULT_MEMORY_VOLUMES))
-
-
-def _expire_vip(chat_id: int) -> bool:
-    """Снимает VIP: память → 64 GB, модели и цена сохраняются."""
-    now = int(time.time())
-    cur = _execute(
-        "SELECT 1 FROM users WHERE chat_id = ? AND role = 'vip' "
-        "AND vip_until > 0 AND vip_until < ?",
-        (chat_id, now),
-    )
-    if cur.fetchone() is None:
-        return False
-    memory = _vip_expiry_memory_sql()
-    _execute(
-        "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
-        "memory_volumes = ? WHERE chat_id = ?",
-        (memory, chat_id),
-    )
-    return True
 
 
 def expire_all_vip() -> list[int]:

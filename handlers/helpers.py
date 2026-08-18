@@ -11,12 +11,10 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from config import ADMIN_IDS
 from db import get_user, update_user_username
 from formatter import format_status
-from goods_tree import GOODS_PER_PAGE
 from logging_setup import log_exception
 
 log = logging.getLogger(__name__)
 
-PER_PAGE = GOODS_PER_PAGE
 ADM_USERS_PER_PAGE = 6
 
 

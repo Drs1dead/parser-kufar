@@ -1,6 +1,7 @@
 """Правила отбора объявлений под подписку пользователя."""
 import logging
 import re
+from functools import lru_cache
 
 from config import (
     ACCESSORY_HEADLINE_STEMS,
@@ -87,8 +88,6 @@ REJECT_PRICE_HIGH = "price_above_max"
 REJECT_PRICE_MISSING = "price_missing"
 REJECT_NOT_PHONE = "not_phone_headline"
 REJECT_NOT_SALE = "not_sale_headline"
-REJECT_EXCLUDE_TITLE = "exclude_term_in_title"
-REJECT_EXCLUDE_PARTS = "exclude_parts_spares"
 REJECT_NEW_PHONE = "new_phone_headline"
 REJECT_NO_KEYWORDS = "no_keywords_selected"
 REJECT_DEVICE_UNKNOWN = "device_not_in_catalog"
@@ -259,18 +258,26 @@ def _contains_stem(text: str, stem: str) -> bool:
 
 def is_whole_phone_listing(ad: dict) -> bool:
     """False — аксессуар, запчасть, коробка, клон и т.п."""
+    if "_whole_phone" in ad:
+        return bool(ad["_whole_phone"])
     headline = ad_headline(ad)
     if not headline:
+        ad["_whole_phone"] = False
         return False
     if any(_contains_stem(headline, stem) for stem in ACCESSORY_HEADLINE_STEMS):
+        ad["_whole_phone"] = False
         return False
     if any(_contains_phrase(headline, term) for term in WHOLE_PHONE_EXCLUDE_HEADLINE):
+        ad["_whole_phone"] = False
         return False
     full_text = f"{headline} {normalize(ad.get('description') or '')}".strip()
     if any(_contains_phrase(full_text, t) for t in PARTS_EXCLUDE_TERMS):
+        ad["_whole_phone"] = False
         return False
     if any(_contains_phrase(headline, t) for t in DEFAULT_EXCLUDE_TERMS):
+        ad["_whole_phone"] = False
         return False
+    ad["_whole_phone"] = True
     return True
 
 
@@ -304,6 +311,7 @@ def is_new_phone_ad(ad: dict) -> bool:
     return any(_contains_phrase(headline, t) for t in NEW_PHONE_TERMS)
 
 
+@lru_cache(maxsize=256)
 def _catalog_match_terms(device: str) -> tuple[str, ...]:
     key = re.sub(r"\s+", " ", normalize(device).strip())
     terms = {key}
@@ -360,7 +368,11 @@ def ad_device_key(ad: dict) -> str | None:
     Важно: ищем самое длинное совпадение, чтобы 'iphone 12 pro max'
     не превращался в 'iphone 12'.
     """
-    return _device_key_from_text(ad_matching_text(ad))
+    if "_device_key" in ad:
+        return ad["_device_key"]
+    key = _device_key_from_text(ad_matching_text(ad))
+    ad["_device_key"] = key
+    return key
 
 
 def parse_memory_gb_text(text: str) -> int | None:
@@ -440,10 +452,7 @@ def filter_reject_reason(
 
     title = normalize(ad.get("title") or "")
     summary = normalize(ad.get("summary") or "")
-    description = normalize(ad.get("description") or "")
-
     headline = f"{title} {summary}".strip()
-    full_text = f"{headline} {description}".strip()
 
     if basic_filtering or smart_filtering:
         if not is_whole_phone_listing(ad):

@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 
 from config import DISPLAY_TZ, format_local_datetime, format_memory_volume, format_price
 
-TELEGRAM_CAPTION_MAX = 1024
 _CAPTION_SAFE_MAX = 980
 
 

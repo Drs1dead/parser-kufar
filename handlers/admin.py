@@ -33,6 +33,7 @@ from handlers.helpers import (
     safe_edit_message,
 )
 from handlers.states import AdminPromoState, AdminUserSearchState, AdminVipGrantState
+from logging_setup import log_exception
 
 log = logging.getLogger(__name__)
 admin_router = Router()
@@ -281,8 +282,8 @@ async def on_admin_callback(cb: CallbackQuery, state: FSMContext) -> None:
             await state.clear()
             await safe_edit_message(
                 cb,
-                _admin_home_text(),
-                reply_markup=_admin_main_keyboard(),
+                admin_home_text(),
+                reply_markup=admin_main_keyboard(),
             )
             await cb.answer()
             return
@@ -485,8 +486,8 @@ async def on_admin_callback(cb: CallbackQuery, state: FSMContext) -> None:
             n = clear_market_prices()
             await safe_edit_message(
                 cb,
-                f"✅ Готово. Удалено записей о ценах: <b>{n}</b>\n\n" + _admin_home_text(),
-                reply_markup=_admin_main_keyboard(),
+                f"✅ Готово. Удалено записей о ценах: <b>{n}</b>\n\n" + admin_home_text(),
+                reply_markup=admin_main_keyboard(),
             )
             await cb.answer("Сброшено")
             return
@@ -722,9 +723,3 @@ async def on_admin_vip_grant_days(msg: Message, state: FSMContext) -> None:
         reply_markup=_admin_user_keyboard(target_id),
         parse_mode=ParseMode.HTML,
     )
-
-
-
-
-_admin_home_text = admin_home_text
-_admin_main_keyboard = admin_main_keyboard

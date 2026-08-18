@@ -23,14 +23,14 @@ from config import (
 )
 from db import (
     avg_market_price,
-    count_seen,
     expire_all_vip,
     get_active_users,
+    has_seen_any,
     increment_sent,
     mark_seen,
     prune_price_tables,
     prune_seen_ads,
-    save_market_price,
+    save_market_prices,
     seen_links_for,
     set_active,
     set_poll_last_run,
@@ -59,8 +59,10 @@ FIRST_RUN_DIGEST_MSG = (
 
 def _ingest_market_prices_from_ads(ads: list[dict]) -> None:
     """Пополняет market_prices только целыми телефонами из батча листинга."""
-    phone_ads = [ad for ad in ads if is_whole_phone_listing(ad)]
-    for ad in phone_ads:
+    rows: list[tuple[str, str, int]] = []
+    for ad in ads:
+        if not is_whole_phone_listing(ad):
+            continue
         if not matches_filters(
             ad,
             VIP_SPECIAL_MAX_PRICE,
@@ -78,7 +80,8 @@ def _ingest_market_prices_from_ads(ads: list[dict]) -> None:
             continue
         if not isinstance(link, str) or not link.strip():
             continue
-        save_market_price(link, dk, price)
+        rows.append((link, dk, price))
+    save_market_prices(rows)
 
 
 def _should_process_user(user: dict) -> bool:
@@ -189,7 +192,7 @@ async def _process_user(
     if not matched:
         return
 
-    is_first_run = count_seen(chat_id) == 0
+    is_first_run = not has_seen_any(chat_id)
     skipped_first_run = 0
     if is_first_run:
         to_send = matched[:FIRST_RUN_LIMIT]
@@ -199,34 +202,34 @@ async def _process_user(
     else:
         to_send = matched
 
-    ideal_mode = is_vip and feed_mode == "ideal"
-    if ideal_mode and to_send:
-        await enrich_ads_descriptions(to_send)
-        strict_ok: list[dict] = []
-        for ad in to_send:
-            if ideal_passes(ad, stage="strict"):
-                strict_ok.append(ad)
-            else:
-                link = ad.get("link")
-                if link:
-                    mark_seen(chat_id, link)
-        to_send = strict_ok
-        if not to_send:
-            return
-
     links = [ad["link"] for ad in to_send if ad.get("link")]
     already_seen = seen_links_for(chat_id, links)
 
-    if not ideal_mode:
-        need_desc = [
-            ad
-            for ad in to_send
-            if ad.get("link")
-            and ad["link"] not in already_seen
-            and not (ad.get("description") or "").strip()
-        ]
-        if need_desc:
-            await enrich_ads_descriptions(need_desc)
+    ideal_mode = is_vip and feed_mode == "ideal"
+    need_desc = [
+        ad
+        for ad in to_send
+        if ad.get("link")
+        and ad["link"] not in already_seen
+        and not (ad.get("description") or "").strip()
+    ]
+    if need_desc:
+        await enrich_ads_descriptions(need_desc)
+
+    if ideal_mode:
+        strict_ok: list[dict] = []
+        for ad in to_send:
+            link = ad.get("link")
+            if not link or link in already_seen:
+                continue
+            if ideal_passes(ad, stage="strict"):
+                strict_ok.append(ad)
+            else:
+                mark_seen(chat_id, link)
+                already_seen.add(link)
+        to_send = strict_ok
+        if not to_send:
+            return
 
     for ad in to_send:
         link = ad.get("link")
@@ -263,13 +266,6 @@ async def _process_user(
             mark_seen(chat_id, link)
             already_seen.add(link)
             increment_sent(chat_id)
-            if (
-                is_vip
-                and device_key
-                and isinstance(price, int)
-                and price > 0
-            ):
-                save_market_price(ad["link"], device_key, price)
             await asyncio.sleep(0.05)
         elif deactivated:
             user["active"] = False
@@ -326,21 +322,19 @@ async def poller(bot: Bot) -> None:
                 last_prune_at = now
 
             users = await asyncio.to_thread(get_active_users, expire_vip=False)
-            if not users:
-                log.debug("poll skip — no active subscribers")
+            due = [u for u in users if _should_process_user(u)]
+            if not due:
+                log.debug("poll skip — no due subscribers")
             else:
-                ads = await fetch_ads(with_description=False)
+                ads = await fetch_ads()
                 await asyncio.to_thread(_ingest_market_prices_from_ads, ads)
                 market_cache: dict[str, int | None] = {}
-                log.debug("poll fetched ads=%d subscribers=%d", len(ads), len(users))
+                log.debug("poll fetched ads=%d due=%d subscribers=%d", len(ads), len(due), len(users))
 
-                for user in users:
+                for user in due:
                     try:
-                        if not _should_process_user(user):
-                            continue
                         await _process_user(bot, user, ads, market_cache)
-                        await asyncio.to_thread(
-                            set_poll_last_run,
+                        set_poll_last_run(
                             user["chat_id"],
                             is_vip=user.get("role") == "vip",
                         )

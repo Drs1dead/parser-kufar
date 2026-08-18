@@ -175,13 +175,18 @@ async def _fetch_search_page(
                         attempt,
                         KUFAR_FETCH_RETRIES,
                     )
+                    waited_retry_after = False
                     if r.status == 429 and attempt < KUFAR_FETCH_RETRIES:
                         retry_after = r.headers.get("Retry-After")
                         if retry_after:
                             try:
                                 await asyncio.sleep(float(retry_after))
+                                waited_retry_after = True
                             except ValueError:
                                 pass
+                    if attempt < KUFAR_FETCH_RETRIES and not waited_retry_after:
+                        await asyncio.sleep(KUFAR_FETCH_RETRY_DELAY * attempt)
+                    continue
                 elif r.status != 200:
                     log.error(
                         "kufar search failed query=%r status=%s",
@@ -286,7 +291,7 @@ async def enrich_ads_descriptions(ads: list[dict], *, concurrency: int = 5) -> N
         await asyncio.gather(*(_enrich_description(session, ad, sem) for ad in need))
 
 
-async def fetch_ads(*, with_description: bool = False) -> list[dict]:
+async def fetch_ads() -> list[dict]:
     """
     Объявления с листинга. Поля: ad_id, title, price, price_usd, location,
     summary, description, link, list_time, photo_urls.
@@ -297,9 +302,12 @@ async def fetch_ads(*, with_description: bool = False) -> list[dict]:
     async with aiohttp.ClientSession(
         headers=DEFAULT_HEADERS, connector=connector
     ) as session:
+        batches = await asyncio.gather(
+            *(_fetch_search(session, query) for query in KUFAR_QUERIES)
+        )
         seen_ids: set[str] = set()
-        for query in KUFAR_QUERIES:
-            for raw in await _fetch_search(session, query):
+        for batch in batches:
+            for raw in batch:
                 raw_id = str(raw.get("ad_id") or raw.get("ad_link") or "")
                 if raw_id and raw_id in seen_ids:
                     continue
@@ -310,9 +318,6 @@ async def fetch_ads(*, with_description: bool = False) -> list[dict]:
             item = normalize_listing(raw)
             if item is not None:
                 ads.append(item)
-
-        if with_description and ads:
-            await enrich_ads_descriptions(ads)
 
     log.debug(
         "kufar listings raw=%d normalized=%d pages_per_query=%s",
