@@ -12,11 +12,13 @@ from config import (
     MAX_PRICE_PRESETS,
     MEMORY_VOLUME_OPTIONS,
 )
+from kufar_catalog import CITY_RGN
 from db import (
     get_user,
     redeem_promo_code,
     set_active,
     set_vip,
+    update_city,
     update_max_price,
     update_memory_volumes,
     update_vip_feed_mode,
@@ -25,6 +27,8 @@ from bot_ui import (
     HELP_TEXT,
     back_keyboard,
     back_row,
+    city_keyboard,
+    city_screen_text,
     custom_price_prompt_text,
     help_keyboard,
     home_keyboard,
@@ -112,6 +116,29 @@ async def on_memory_toggle(cb: CallbackQuery) -> None:
         memory_screen_text(user),
         reply_markup=memory_keyboard(user),
         notice="💾 Сохранено",
+    )
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("city:t:"))
+async def on_city_select(cb: CallbackQuery) -> None:
+    if cb.message is None:
+        await cb.answer()
+        return
+    user = await require_user_cb(cb)
+    if user is None:
+        return
+    chat_id = cb.message.chat.id
+    slug = (cb.data or "")[7:]
+    if slug not in CITY_RGN:
+        await cb.answer("Неизвестный город", show_alert=True)
+        return
+
+    user["city"] = update_city(chat_id, slug)
+    await flush_screen(
+        cb,
+        city_screen_text(user),
+        reply_markup=city_keyboard(user),
+        notice="📍 Сохранено",
     )
 
 
@@ -230,6 +257,15 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
                 cb,
                 memory_screen_text(user),
                 reply_markup=memory_keyboard(user),
+            )
+            return
+
+        if data == "nav:city":
+            await state.clear()
+            await flush_screen(
+                cb,
+                city_screen_text(user),
+                reply_markup=city_keyboard(user),
             )
             return
 

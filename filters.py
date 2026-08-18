@@ -97,6 +97,8 @@ REJECT_EXCHANGE_NEGATIVE = "exchange_negative"
 REJECT_EXCHANGE_NO_HINT = "exchange_no_positive_hint"
 REJECT_NOT_WHOLE_PHONE = "not_whole_phone"
 REJECT_MEMORY_NOT_SELECTED = "memory_not_selected"
+REJECT_COMPANY_AD = "company_ad"
+REJECT_THIN_JUNK = "thin_junk_headline"
 REJECT_IDEAL_NO_CONDITION = "ideal_no_condition"
 REJECT_IDEAL_BAD_CONDITION = "ideal_bad_condition"
 REJECT_IDEAL_BATTERY_UNKNOWN = "ideal_battery_unknown"
@@ -437,6 +439,8 @@ def filter_reject_reason(
     device_filter: bool = True,
     memory_filter: bool = True,
     skip_new_phone: bool = False,
+    company_filter: bool = False,
+    thin_junk: bool = False,
 ) -> str | None:
     """
     None — объявление проходит фильтры.
@@ -453,6 +457,12 @@ def filter_reject_reason(
     title = normalize(ad.get("title") or "")
     summary = normalize(ad.get("summary") or "")
     headline = f"{title} {summary}".strip()
+
+    if company_filter and ad.get("company_ad"):
+        return REJECT_COMPANY_AD
+    if thin_junk:
+        if any(_contains_stem(headline, stem) for stem in ACCESSORY_HEADLINE_STEMS):
+            return REJECT_THIN_JUNK
 
     if basic_filtering or smart_filtering:
         if not is_whole_phone_listing(ad):
@@ -501,6 +511,8 @@ def matches_filters(
     device_filter: bool = True,
     memory_filter: bool = True,
     skip_new_phone: bool = False,
+    company_filter: bool = False,
+    thin_junk: bool = False,
 ) -> bool:
     """
     Цена — по объявлению целиком.
@@ -519,6 +531,8 @@ def matches_filters(
             device_filter=device_filter,
             memory_filter=memory_filter,
             skip_new_phone=skip_new_phone,
+            company_filter=company_filter,
+            thin_junk=thin_junk,
         )
         is None
     )

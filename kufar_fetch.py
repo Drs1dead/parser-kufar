@@ -17,6 +17,7 @@ from config import (
     KUFAR_SIZE,
 )
 from filters import parse_memory_gb_text
+from kufar_catalog import catalog_search_params
 
 log = logging.getLogger(__name__)
 
@@ -45,15 +46,18 @@ def _param(params: list[dict], name: str) -> Optional[dict]:
     return None
 
 
-def _param_label(params: list[dict], name: str) -> str:
-    p = _param(params, name)
-    if not p:
-        return ""
-    vl = p.get("vl")
-    if isinstance(vl, str) and vl:
-        return vl
-    v = p.get("v")
-    return str(v) if v is not None else ""
+def _param_label(params: list[dict], *names: str) -> str:
+    for name in names:
+        p = _param(params, name)
+        if not p:
+            continue
+        vl = p.get("vl")
+        if isinstance(vl, str) and vl:
+            return vl
+        v = p.get("v")
+        if v is not None:
+            return str(v)
+    return ""
 
 
 def _build_location(ad_params: list[dict]) -> str:
@@ -66,13 +70,13 @@ def _build_location(ad_params: list[dict]) -> str:
 
 def _build_summary(ad_params: list[dict]) -> str:
     bits: list[str] = []
-    for key, prefix in (
-        ("condition", "Состояние"),
-        ("phone_model", "Модель"),
-        ("phone_memory", "Память"),
-        ("phone_color", "Цвет"),
+    for keys, prefix in (
+        (("condition",), "Состояние"),
+        (("phones_model", "phone_model"), "Модель"),
+        (("phablet_phones_memory", "phone_memory"), "Память"),
+        (("phones_color", "phone_color"), "Цвет"),
     ):
-        label = _param_label(ad_params, key)
+        label = _param_label(ad_params, *keys)
         if label:
             bits.append(f"{prefix}: {label}")
     return " · ".join(bits)
@@ -109,8 +113,10 @@ def normalize_listing(raw: dict) -> Optional[dict]:
         return None
 
     ad_params = raw.get("ad_parameters") or []
-    phone_model = _param_label(ad_params, "phone_model").strip()
-    phone_memory = _param_label(ad_params, "phone_memory").strip()
+    phone_model = _param_label(ad_params, "phones_model", "phone_model").strip()
+    phone_memory = _param_label(
+        ad_params, "phablet_phones_memory", "phone_memory"
+    ).strip()
     summary = _build_summary(ad_params)
     condition_label = _param_label(ad_params, "condition").strip()
     memory_gb = parse_memory_gb_text(phone_memory) or parse_memory_gb_text(summary)
@@ -125,6 +131,7 @@ def normalize_listing(raw: dict) -> Optional[dict]:
         "phone_model": phone_model,
         "phone_memory": phone_memory,
         "memory_gb": memory_gb,
+        "company_ad": bool(raw.get("company_ad")),
         "description": "",
         "link": link.split("?")[0],
         "list_time": raw.get("list_time"),
@@ -144,33 +151,27 @@ def _next_page_cursor(data: dict) -> str | None:
 
 async def _fetch_search_page(
     session: aiohttp.ClientSession,
-    query: str,
+    params: dict[str, str],
     *,
     cursor: str | None = None,
 ) -> tuple[list[dict], str | None]:
     """Одна страница листинга: объявления и cursor следующей страницы."""
-    params = {
-        "lang": "ru",
-        "size": str(KUFAR_SIZE),
-        "sort": "lst.d",
-        "rgn": str(KUFAR_REGION),
-        "cur": "BYR",
-        "query": query,
-    }
+    req = dict(params)
     if cursor:
-        params["cursor"] = cursor
+        req["cursor"] = cursor
+    label = req.get("query") or req.get("phm") or req.get("cat") or "search"
     last_err: str | None = None
     for attempt in range(1, KUFAR_FETCH_RETRIES + 1):
         try:
             async with session.get(
-                SEARCH_URL, params=params, timeout=aiohttp.ClientTimeout(total=25)
+                SEARCH_URL, params=req, timeout=aiohttp.ClientTimeout(total=25)
             ) as r:
                 if r.status >= 500 or r.status == 429:
                     body = (await r.text())[:200]
                     last_err = f"status={r.status} {body}"
                     log.warning(
                         "kufar search retry query=%r %s attempt=%s/%s",
-                        query,
+                        label,
                         last_err,
                         attempt,
                         KUFAR_FETCH_RETRIES,
@@ -190,7 +191,7 @@ async def _fetch_search_page(
                 elif r.status != 200:
                     log.error(
                         "kufar search failed query=%r status=%s",
-                        query,
+                        label,
                         r.status,
                     )
                     return [], None
@@ -201,7 +202,7 @@ async def _fetch_search_page(
             last_err = repr(e)
             log.warning(
                 "kufar search network query=%r %s attempt=%s/%s",
-                query,
+                label,
                 last_err,
                 attempt,
                 KUFAR_FETCH_RETRIES,
@@ -211,20 +212,35 @@ async def _fetch_search_page(
     if last_err:
         log.error(
             "kufar search exhausted query=%r attempts=%s err=%s",
-            query,
+            label,
             KUFAR_FETCH_RETRIES,
             last_err,
         )
     return [], None
 
 
-async def _fetch_search(session: aiohttp.ClientSession, query: str) -> list[dict]:
-    """До KUFAR_MAX_PAGES страниц листинга по одному поисковому запросу."""
+def _text_search_params(query: str) -> dict[str, str]:
+    return {
+        "lang": "ru",
+        "size": str(KUFAR_SIZE),
+        "sort": "lst.d",
+        "rgn": str(KUFAR_REGION),
+        "cur": "BYR",
+        "query": query,
+    }
+
+
+async def _fetch_search_params(
+    session: aiohttp.ClientSession, params: dict[str, str]
+) -> list[dict]:
+    """До KUFAR_MAX_PAGES страниц листинга по одному набору params."""
     all_raw: list[dict] = []
     cursor: str | None = None
+    label = params.get("query") or params.get("phm") or params.get("cat") or "search"
+    page_num = 0
     for page_num in range(1, KUFAR_MAX_PAGES + 1):
         batch, next_cursor = await _fetch_search_page(
-            session, query, cursor=cursor
+            session, params, cursor=cursor
         )
         if batch:
             all_raw.extend(batch)
@@ -234,11 +250,16 @@ async def _fetch_search(session: aiohttp.ClientSession, query: str) -> list[dict
     if KUFAR_MAX_PAGES > 1 and len(all_raw) > KUFAR_SIZE:
         log.debug(
             "kufar paginated query=%r pages=%s raw=%d",
-            query,
+            label,
             page_num,
             len(all_raw),
         )
     return all_raw
+
+
+async def _fetch_search(session: aiohttp.ClientSession, query: str) -> list[dict]:
+    """До KUFAR_MAX_PAGES страниц листинга по одному поисковому запросу."""
+    return await _fetch_search_params(session, _text_search_params(query))
 
 
 async def _fetch_description(session: aiohttp.ClientSession, link: str) -> str:
@@ -278,6 +299,21 @@ async def _enrich_description(
         ad["description"] = await _fetch_description(session, ad["link"])
 
 
+def _normalize_raw_ads(raw_ads: list[dict]) -> list[dict]:
+    seen_ids: set[str] = set()
+    ads: list[dict] = []
+    for raw in raw_ads:
+        raw_id = str(raw.get("ad_id") or raw.get("ad_link") or "")
+        if raw_id and raw_id in seen_ids:
+            continue
+        if raw_id:
+            seen_ids.add(raw_id)
+        item = normalize_listing(raw)
+        if item is not None:
+            ads.append(item)
+    return ads
+
+
 async def enrich_ads_descriptions(ads: list[dict], *, concurrency: int = 5) -> None:
     """Параллельно подгружает описания для списка объявлений."""
     need = [a for a in ads if not (a.get("description") or "").strip() and a.get("link")]
@@ -297,7 +333,6 @@ async def fetch_ads() -> list[dict]:
     summary, description, link, list_time, photo_urls.
     """
     raw_ads: list[dict] = []
-    ads: list[dict] = []
     connector = aiohttp.TCPConnector(limit=8)
     async with aiohttp.ClientSession(
         headers=DEFAULT_HEADERS, connector=connector
@@ -305,24 +340,59 @@ async def fetch_ads() -> list[dict]:
         batches = await asyncio.gather(
             *(_fetch_search(session, query) for query in KUFAR_QUERIES)
         )
-        seen_ids: set[str] = set()
         for batch in batches:
-            for raw in batch:
-                raw_id = str(raw.get("ad_id") or raw.get("ad_link") or "")
-                if raw_id and raw_id in seen_ids:
-                    continue
-                if raw_id:
-                    seen_ids.add(raw_id)
-                raw_ads.append(raw)
-        for raw in raw_ads:
-            item = normalize_listing(raw)
-            if item is not None:
-                ads.append(item)
-
+            raw_ads.extend(batch)
+    ads = _normalize_raw_ads(raw_ads)
     log.debug(
         "kufar listings raw=%d normalized=%d pages_per_query=%s",
         len(raw_ads),
         len(ads),
         KUFAR_MAX_PAGES,
+    )
+    return ads
+
+
+def _catalog_request_params(facets: dict[str, str]) -> dict[str, str]:
+    params = {
+        "lang": "ru",
+        "size": str(KUFAR_SIZE),
+        "sort": "lst.d",
+        "cur": "BYR",
+    }
+    params.update(facets)
+    return params
+
+
+async def fetch_ads_for_key(
+    city: str,
+    models: list[str] | tuple[str, ...],
+    memories: list[str] | tuple[str, ...],
+) -> list[dict]:
+    """Листинг по ключу: город + модели + память (частники, категория телефоны)."""
+    facet_sets = catalog_search_params(city, models, memories)
+    if not facet_sets:
+        return []
+    connector = aiohttp.TCPConnector(limit=8)
+    async with aiohttp.ClientSession(
+        headers=DEFAULT_HEADERS, connector=connector
+    ) as session:
+        batches = await asyncio.gather(
+            *(
+                _fetch_search_params(session, _catalog_request_params(facets))
+                for facets in facet_sets
+            )
+        )
+    raw_ads: list[dict] = []
+    for batch in batches:
+        raw_ads.extend(batch)
+    ads = _normalize_raw_ads(raw_ads)
+    log.debug(
+        "kufar catalog city=%s models=%s mem=%s raw=%d normalized=%d requests=%d",
+        city,
+        len(models),
+        list(memories),
+        len(raw_ads),
+        len(ads),
+        len(facet_sets),
     )
     return ads

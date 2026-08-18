@@ -21,6 +21,7 @@ from config import (
     SQLITE_SYNCHRONOUS,
     VIP_SUBSCRIPTION_DAYS,
 )
+from kufar_catalog import CITY_RGN, DEFAULT_CITY, normalize_city
 
 log = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ def _generate_referral_code() -> str:
 _USER_SELECT = (
     "chat_id, active, role, vip_until, max_price, keywords, sent_count, created_at, "
     "vip_feed_mode, username, memory_volumes, referral_code, referred_by, "
-    "poll_last_vip, poll_last_regular"
+    "poll_last_vip, poll_last_regular, city"
 )
 
 def _row_to_user(row: tuple) -> dict:
@@ -96,6 +97,7 @@ def _row_to_user(row: tuple) -> dict:
         "referred_by": int(row[12]) if len(row) > 12 and row[12] is not None else None,
         "poll_last_vip": int(row[13] or 0) if len(row) > 13 else 0,
         "poll_last_regular": int(row[14] or 0) if len(row) > 14 else 0,
+        "city": normalize_city(row[15] if len(row) > 15 else None),
     }
 
 
@@ -213,7 +215,8 @@ def init_db() -> None:
             max_price  INTEGER NOT NULL,
             keywords   TEXT    NOT NULL,
             sent_count INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            city       TEXT    NOT NULL DEFAULT 'minsk'
         );
 
         CREATE TABLE IF NOT EXISTS seen_ads (
@@ -293,6 +296,11 @@ def init_db() -> None:
         _execute(
             "ALTER TABLE users ADD COLUMN poll_last_regular INTEGER NOT NULL DEFAULT 0"
         )
+    cols = _table_columns("users")
+    if "city" not in cols:
+        _execute(
+            f"ALTER TABLE users ADD COLUMN city TEXT NOT NULL DEFAULT '{DEFAULT_CITY}'"
+        )
     _executescript(
         """
         CREATE TABLE IF NOT EXISTS referrals (
@@ -360,8 +368,8 @@ def add_user(chat_id: int, *, username: str | None = None) -> bool:
         ref_code = _generate_referral_code()
         _execute(
             "INSERT INTO users (chat_id, active, role, vip_until, max_price, keywords, "
-            "created_at, vip_feed_mode, username, memory_volumes, referral_code) "
-            "VALUES (?, 1, 'regular', 0, ?, ?, ?, 'normal', ?, ?, ?)",
+            "created_at, vip_feed_mode, username, memory_volumes, referral_code, city) "
+            "VALUES (?, 1, 'regular', 0, ?, ?, ?, 'normal', ?, ?, ?, ?)",
             (
                 chat_id,
                 DEFAULT_MAX_PRICE,
@@ -370,6 +378,7 @@ def add_user(chat_id: int, *, username: str | None = None) -> bool:
                 u,
                 _memory_csv(list(DEFAULT_MEMORY_VOLUMES)),
                 ref_code,
+                DEFAULT_CITY,
             ),
         )
         return True
@@ -490,6 +499,16 @@ def update_memory_volumes(chat_id: int, volumes: list[str]) -> list[str]:
         (_memory_csv(normalized), chat_id),
     )
     return normalized
+
+
+def update_city(chat_id: int, city: str) -> str:
+    slug = (city or "").strip().lower().replace("ё", "е")
+    if slug not in CITY_RGN:
+        cur = _execute("SELECT city FROM users WHERE chat_id = ?", (chat_id,))
+        row = cur.fetchone()
+        return normalize_city(row[0] if row else None)
+    _execute("UPDATE users SET city = ? WHERE chat_id = ?", (slug, chat_id))
+    return slug
 
 
 def ensure_referral_code(chat_id: int, *, user: dict | None = None) -> str:

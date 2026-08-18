@@ -7,6 +7,7 @@ main.py              # Запуск: Telegram polling + фоновый poller
 poller.py            # Цикл: Kufar → фильтры → отправка
 user_matching.py     # Какие объявления подходят пользователю
 kufar_fetch.py       # Запросы к API Kufar
+kufar_catalog.py     # Фасеты cat/phm/ppm/ot/rgn
 filters.py           # Правила отбора объявлений
 db.py                # SQLite
 config.py            # Настройки из .env
@@ -27,9 +28,11 @@ handlers/
 
 ## Поток рассылки
 
-1. `poller` один раз загружает объявления с Kufar.
-2. Для каждого активного пользователя — `match_ads_for_user` (с кэшем средних цен на цикл). `smart_filtering` (жёсткие правила в `filters.py`) включён только если `role == vip`.
+1. `poller` берёт due-пользователей. При `KUFAR_USE_CATALOG` группирует их по ключу `город + модели + память` (город из профиля) и качает Kufar **один раз на ключ** (`cat=17010`, `phm`/`ppm`, `ot=1`).
+2. Для каждого due — `match_ads_for_user` по батчу его ключа. При catalog: без `smart_filtering` (кроме VIP «идеальные»), магазины (`company_ad`) и тонкий антихлам в заголовке.
 3. Новые объявления отправляются в Telegram (`formatter.format_ad`).
+
+Фасеты: [`kufar_catalog.py`](kufar_catalog.py). Старый текстовый fetch (`KUFAR_QUERIES`) — если `KUFAR_USE_CATALOG=false`.
 
 ### VIP-потоки (`users.vip_feed_mode`)
 
@@ -61,7 +64,7 @@ handlers/
 
 ## Скорость
 
-- Один fetch Kufar на цикл, не на пользователя; до `KUFAR_MAX_PAGES` страниц на запрос (cursor).
+- При `KUFAR_USE_CATALOG` — один fetch на уникальный ключ (город+модели+память), не на пользователя; до `KUFAR_MAX_PAGES` страниц на запрос (cursor).
 - Разные интервалы опроса для VIP и обычных аккаунтов.
 - Кэш `market_prices` в памяти на один проход poller; в БД — только цены за `PRICE_DATA_RETENTION_DAYS` (по умолчанию 14), старые строки prune при старте и в poller.
 - Минимум лишних запросов к БД в хендлерах (один `get_user` после обновления username).

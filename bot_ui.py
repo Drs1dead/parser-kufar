@@ -14,6 +14,7 @@ from config import (
     format_price,
 )
 from db import count_referrals, ensure_referral_code
+from kufar_catalog import CITY_LABELS, CITY_ORDER, city_label, normalize_city
 
 GOODS_CRUMB = "📱 <b>Товары</b>"
 
@@ -29,12 +30,13 @@ HELP_TEXT = (
     "Бот ищет телефоны на <b>Kufar.by</b> и присылает подходящие объявления. "
     f"Цены — в белорусских рублях (<b>{CURRENCY_SIGN}</b>).\n\n"
     "1. <b>Товары</b> — отметьте модели\n"
-    "2. <b>Память</b> и <b>Цена</b> — фильтр\n"
+    "2. <b>Память</b>, <b>Цена</b> и <b>Город</b> — фильтр\n"
     "3. <b>Включить уведомления</b> в главном меню\n\n"
     "<b>Кнопки меню</b>\n"
     "📱 Товары — какие модели искать\n"
     "💾 Память — объём накопителя\n"
     f"💰 Цена — максимум в {CURRENCY_SIGN}\n"
+    "📍 Город — где искать объявления\n"
     "🔔 Уведомления — вкл или пауза\n"
     "⭐ VIP — больше моделей и доп. потоки\n\n"
     f"📰 <b>Новости</b>\n"
@@ -131,7 +133,7 @@ def home_text(user: dict | None, *, is_new: bool) -> str:
         lines += [
             "<b>Как начать</b>",
             "1. Товары — выберите модели",
-            "2. Цена и Память — фильтр",
+            "2. Цена, Память и Город — фильтр",
             "3. Включить уведомления",
             "",
         ]
@@ -140,6 +142,7 @@ def home_text(user: dict | None, *, is_new: bool) -> str:
         f"Модели: <b>{models_n}</b> {model_word}",
         f"Память: <b>{_memory_display(user.get('memory_volumes'))}</b>",
         f"Цена: до <b>{format_price(max_p)}</b>",
+        f"Город: <b>{city_label(user.get('city'))}</b>",
     ]
 
     mode = user.get("vip_feed_mode") or "normal"
@@ -193,6 +196,7 @@ def home_keyboard(*, is_admin: bool, user: dict | None = None) -> InlineKeyboard
             InlineKeyboardButton(text="💾 Память", callback_data="nav:memory"),
         ]
     )
+    rows.append([InlineKeyboardButton(text="📍 Город", callback_data="nav:city")])
     rows.append(
         [
             InlineKeyboardButton(text="⭐ VIP", callback_data="nav:vip"),
@@ -221,14 +225,14 @@ def vip_text(user: dict | None) -> str:
             ]
         else:
             lines += ["", "Поток: <b>обычная рассылка</b>"]
-        lines += ["", "Модели — в «Товары». Потоки — кнопками ниже."]
+        lines += ["", "Потоки — по выбранным моделям и памяти. Кнопки ниже."]
     else:
         lines += [
             "",
             "Что даёт VIP:",
             "• без лимита моделей",
             "• фильтры качества",
-            "• потоки: ниже рынка, обмен, идеальные",
+            "• потоки: ниже рынка, обмен, идеальные — по вашим моделям и памяти",
             "",
             f"Цена: <b>{VIP_PRICE_USD}$</b> / 30 дней · @manohio",
             "Промокод — кнопка ниже.",
@@ -300,6 +304,37 @@ def memory_keyboard(user: dict | None) -> InlineKeyboardMarkup:
             InlineKeyboardButton(
                 text=f"{label}{mark}",
                 callback_data=f"mem:t:{vol}",
+            )
+        )
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append(back_row())
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def city_screen_text(user: dict | None) -> str:
+    current = city_label((user or {}).get("city"))
+    return (
+        "📍 <b>Город</b>\n\n"
+        f"Сейчас: <b>{current}</b>\n\n"
+        "Искать объявления в этом городе."
+    )
+
+
+def city_keyboard(user: dict | None) -> InlineKeyboardMarkup:
+    selected_slug = normalize_city((user or {}).get("city"))
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for slug in CITY_ORDER:
+        label = CITY_LABELS[slug]
+        mark = " ✅" if slug == selected_slug else ""
+        row.append(
+            InlineKeyboardButton(
+                text=f"{label}{mark}",
+                callback_data=f"city:t:{slug}",
             )
         )
         if len(row) == 2:

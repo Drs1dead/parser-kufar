@@ -307,6 +307,14 @@ KUFAR_QUERIES: tuple[str, ...] = tuple(
 ) or ("iphone", "samsung galaxy s", "samsung galaxy z flip", "samsung galaxy z fold")
 KUFAR_REGION = int(os.getenv("KUFAR_REGION", "7"))
 KUFAR_SIZE = int(os.getenv("KUFAR_SIZE", "40"))
+# Каталожный search-api (phm/ppm/ot) вместо широких текстовых KUFAR_QUERIES.
+_kufar_catalog = os.getenv("KUFAR_USE_CATALOG", "true").strip().lower()
+KUFAR_USE_CATALOG = _kufar_catalog not in ("0", "false", "no", "off")
+KUFAR_CATALOG_COMPARE = os.getenv("KUFAR_CATALOG_COMPARE", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 # Не целый телефон: проверка по title + summary (стемы ловят стекла/стёкла).
 ACCESSORY_HEADLINE_STEMS: tuple[str, ...] = (

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from config import FILTER_DEBUG_LOG, MARKET_DISCOUNT_THRESHOLD
+from config import FILTER_DEBUG_LOG, KUFAR_USE_CATALOG, MARKET_DISCOUNT_THRESHOLD
 from db import avg_market_price
 from filters import (
     ad_device_key,
@@ -21,11 +21,15 @@ VIP_SPECIAL_MAX_PRICE = 99_999_999
 
 def _smart_filtering_for(user: dict) -> bool:
     """Жёсткий отбор (целый телефон, не продажа, «новый» и т.д.) — только для VIP."""
+    if KUFAR_USE_CATALOG:
+        return False
     return user.get("role") == "vip"
 
 
 def _basic_filtering_for(user: dict) -> bool:
     """Для обычных: отсекаем коробки/аксессуары, без остальных VIP-правил."""
+    if KUFAR_USE_CATALOG:
+        return False
     return user.get("role") != "vip"
 
 
@@ -37,9 +41,11 @@ def _passes_base(ad: dict, user: dict, *, max_price: int, skip_new_phone: bool =
         memory_volumes=user.get("memory_volumes"),
         smart_filtering=_smart_filtering_for(user),
         basic_filtering=_basic_filtering_for(user),
-        device_filter=True,
-        memory_filter=True,
+        device_filter=not KUFAR_USE_CATALOG,
+        memory_filter=not KUFAR_USE_CATALOG,
         skip_new_phone=skip_new_phone,
+        company_filter=KUFAR_USE_CATALOG,
+        thin_junk=KUFAR_USE_CATALOG,
     )
 
 
@@ -53,8 +59,10 @@ def _log_reject(ad: dict, user: dict, *, max_price: int, feed_mode: str) -> None
         memory_volumes=user.get("memory_volumes"),
         smart_filtering=_smart_filtering_for(user),
         basic_filtering=_basic_filtering_for(user),
-        device_filter=True,
-        memory_filter=True,
+        device_filter=not KUFAR_USE_CATALOG,
+        memory_filter=not KUFAR_USE_CATALOG,
+        company_filter=KUFAR_USE_CATALOG,
+        thin_junk=KUFAR_USE_CATALOG,
     )
     if reason:
         log_filter_reject(ad, reason, chat_id=user["chat_id"], feed_mode=feed_mode)

@@ -3,6 +3,7 @@ from html import escape
 from datetime import datetime, timezone
 
 from config import DISPLAY_TZ, format_local_datetime, format_memory_volume, format_price
+from kufar_catalog import city_label
 
 _CAPTION_SAFE_MAX = 980
 
@@ -158,6 +159,7 @@ def format_status(user: dict) -> str:
         f"📬 <b>Рассылка:</b> {active}\n"
         f"💰 <b>Цена до:</b> {format_price(max_price)}\n"
         f"💾 <b>Память:</b> {_esc(mem)}\n"
+        f"📍 <b>Город:</b> {_esc(city_label(user.get('city')))}\n"
         f"📱 <b>Модели:</b> {_esc(kw)}\n"
         f"📨 <b>Отправлено объявлений:</b> {sent}"
         f"{vip_feed}"

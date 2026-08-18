@@ -17,6 +17,8 @@ from aiogram.types import InputMediaPhoto
 from config import (
     CHECK_INTERVAL,
     FIRST_RUN_LIMIT,
+    KUFAR_CATALOG_COMPARE,
+    KUFAR_USE_CATALOG,
     MARKET_DISCOUNT_THRESHOLD,
     REGULAR_CHECK_INTERVAL,
     VIP_CHECK_INTERVAL,
@@ -38,7 +40,8 @@ from db import (
 from filters import ad_device_key, is_whole_phone_listing, matches_filters
 from filters import ideal_passes
 from formatter import format_ad, truncate_ad_caption
-from kufar_fetch import enrich_ads_descriptions, fetch_ads
+from kufar_catalog import FetchKey, fetch_key_for_user, group_users_by_fetch_key
+from kufar_fetch import enrich_ads_descriptions, fetch_ads, fetch_ads_for_key
 from logging_setup import log_exception
 from user_matching import VIP_SPECIAL_MAX_PRICE, match_ads_for_user
 
@@ -293,6 +296,29 @@ async def _process_user(
             log_exception(log, "first-run digest failed chat_id=%s: %s", chat_id, exc)
 
 
+async def _fetch_catalog_groups(
+    groups: dict[FetchKey, list[dict]],
+) -> tuple[dict[FetchKey, list[dict]], list[dict]]:
+    keys = list(groups.keys())
+    if not keys:
+        return {}, []
+    batches = await asyncio.gather(
+        *(fetch_ads_for_key(city, models, memories) for city, models, memories in keys)
+    )
+    ads_by_key: dict[FetchKey, list[dict]] = {}
+    merged: list[dict] = []
+    seen_links: set[str] = set()
+    for key, ads in zip(keys, batches):
+        ads_by_key[key] = ads
+        for ad in ads:
+            link = ad.get("link")
+            if not isinstance(link, str) or not link or link in seen_links:
+                continue
+            seen_links.add(link)
+            merged.append(ad)
+    return ads_by_key, merged
+
+
 async def poller(bot: Bot) -> None:
     # Тяжёлые операции (expire/prune) не обязательно делать каждый цикл.
     # Это снижает нагрузку на SQLite при большом количестве пользователей.
@@ -325,10 +351,41 @@ async def poller(bot: Bot) -> None:
             due = [u for u in users if _should_process_user(u)]
             if not due:
                 log.debug("poll skip — no due subscribers")
+            elif KUFAR_USE_CATALOG:
+                groups = group_users_by_fetch_key(due)
+                ads_by_key, merged = await _fetch_catalog_groups(groups)
+                if KUFAR_CATALOG_COMPARE:
+                    text_ads = await fetch_ads()
+                    log.info(
+                        "kufar catalog compare catalog=%d text=%d keys=%d",
+                        len(merged),
+                        len(text_ads),
+                        len(groups),
+                    )
+                await asyncio.to_thread(_ingest_market_prices_from_ads, merged)
+                market_cache: dict[str, int | None] = {}
+                log.debug(
+                    "poll catalog ads=%d keys=%d due=%d subscribers=%d",
+                    len(merged),
+                    len(groups),
+                    len(due),
+                    len(users),
+                )
+                for user in due:
+                    try:
+                        key = fetch_key_for_user(user)
+                        ads = ads_by_key.get(key) or []
+                        await _process_user(bot, user, ads, market_cache)
+                        set_poll_last_run(
+                            user["chat_id"],
+                            is_vip=user.get("role") == "vip",
+                        )
+                    except Exception:
+                        log_exception(log, "poll user failed chat_id=%s", user["chat_id"])
             else:
                 ads = await fetch_ads()
                 await asyncio.to_thread(_ingest_market_prices_from_ads, ads)
-                market_cache: dict[str, int | None] = {}
+                market_cache = {}
                 log.debug("poll fetched ads=%d due=%d subscribers=%d", len(ads), len(due), len(users))
 
                 for user in due:
