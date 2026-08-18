@@ -169,3 +169,57 @@ def models_for_category(value: str | None) -> tuple[str, ...]:
 
 def is_phones_category(value: str | None) -> bool:
     return normalize_category(value) == CAT_PHONES
+
+
+_MODEL_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("samsung galaxy z flip", "Galaxy Z Flip"),
+    ("samsung galaxy z fold", "Galaxy Z Fold"),
+    ("samsung galaxy", "Galaxy"),
+    ("apple watch", "Apple Watch"),
+    ("macbook", "MacBook"),
+    ("ipad", "iPad"),
+    ("iphone", "iPhone"),
+)
+
+_MODEL_TOKEN_LABELS: dict[str, str] = {
+    "se": "SE",
+    "xs": "XS",
+    "xr": "XR",
+    "pro": "Pro",
+    "max": "Max",
+    "plus": "Plus",
+    "mini": "mini",
+    "ultra": "Ultra",
+    "air": "Air",
+    "fe": "FE",
+    "5g": "5G",
+    "series": "Series",
+}
+
+
+def _token_label(token: str) -> str:
+    mapped = _MODEL_TOKEN_LABELS.get(token)
+    if mapped:
+        return mapped
+    if len(token) >= 2 and token[0] == "m" and token[1:].isdigit():
+        return token.upper()
+    return token.upper() if token.isalpha() and len(token) <= 2 else token.capitalize()
+
+
+def model_label(raw: str) -> str:
+    """Подпись модели для UI. Ключ в БД не меняем."""
+    key = " ".join(str(raw or "").lower().split())
+    if not key:
+        return ""
+    title = None
+    rest = key
+    for prefix, pretty in _MODEL_PREFIXES:
+        if key == prefix or key.startswith(prefix + " "):
+            title = pretty
+            rest = key[len(prefix) :].strip()
+            break
+    if title is None:
+        return key
+    if not rest:
+        return title
+    return f"{title} {' '.join(_token_label(tok) for tok in rest.split())}"

@@ -221,7 +221,7 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
                     "🔄 Поток «обмен»"
                     if new_mode == "exchange"
                     else (
-                        "✨ Поток «идеальные (бета)»"
+                        "✨ Поток «идеальные»"
                         if new_mode == "ideal"
                         else "📬 Обычная рассылка"
                     )

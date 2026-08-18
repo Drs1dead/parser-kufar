@@ -20,7 +20,7 @@ from product_catalog import (
     is_phones_category,
 )
 
-GOODS_CRUMB = "📱 <b>Товары</b>"
+GOODS_CRUMB = "<b>Товары</b>"
 
 BOT_USERNAME: str = ""
 
@@ -32,23 +32,12 @@ SUPPORT_HANDLE = "@KufiBY"
 HELP_TEXT = (
     "💡 <b>Как пользоваться</b>\n\n"
     "Бот ищет технику на <b>Kufar.by</b> и присылает подходящие объявления. "
-    f"Цены — в белорусских рублях (<b>{CURRENCY_SIGN}</b>).\n\n"
-    "Одновременно ищется <b>одна категория</b>: смартфоны, ноутбуки, планшеты или часы.\n\n"
+    f"Цены — в <b>{CURRENCY_SIGN}</b>.\n\n"
+    "Одна категория за раз: смартфоны, ноутбуки, планшеты или часы.\n\n"
     "1. <b>Товары</b> — категория и модели\n"
-    "2. <b>Цена</b>, <b>Город</b> и (для смартфонов) <b>Память</b>\n"
-    "3. <b>Включить уведомления</b> в главном меню\n\n"
-    "<b>Кнопки меню</b>\n"
-    "📱 Товары — категория и модели\n"
-    "💾 Память — объём накопителя (смартфоны)\n"
-    f"💰 Цена — максимум в {CURRENCY_SIGN}\n"
-    "📍 Город — где искать объявления\n"
-    "🔔 Уведомления — вкл или пауза\n"
-    "⭐ VIP — больше моделей и доп. потоки\n\n"
-    f"📰 <b>Новости</b>\n"
-    f"Канал <a href='{SUPPORT_URL}'>{SUPPORT_HANDLE}</a>. Вопросы — туда же.\n\n"
-    "<b>Документы</b>\n"
-    f"🔒 <a href='{PRIVACY_POLICY_URL}'>Политика конфиденциальности</a>\n"
-    f"📄 <a href='{TERMS_OF_SERVICE_URL}'>Пользовательское соглашение</a>"
+    "2. <b>Цена</b>, <b>город</b> и (для смартфонов) <b>память</b>\n"
+    "3. <b>Включить уведомления</b>\n\n"
+    "Новости и документы — кнопки ниже."
 )
 
 
@@ -117,43 +106,34 @@ def help_keyboard() -> InlineKeyboardMarkup:
 def home_text(user: dict | None, *, is_new: bool) -> str:
     if user is None:
         return (
-            "<b>Kufar</b> · поиск телефонов\n\n"
-            f"Цены в белорусских рублях (<b>{CURRENCY_SIGN}</b>).\n\n"
+            "<b>Kufi</b>\n"
+            "поиск техники на Kufar\n\n"
             "Нажмите <code>/start</code>."
         )
 
     active = user.get("active")
-    sub = "включены" if active else "на паузе"
     models_n = _kw_count(user)
     max_p = user.get("max_price") or 0
-    model_word = _plural_models(models_n)
-
-    lines = [
-        "<b>Kufar</b> · поиск телефонов",
-        "",
-        f"Цены в белорусских рублях (<b>{CURRENCY_SIGN}</b>).",
-        "",
-    ]
-    if is_new:
-        lines += [
-            "<b>Как начать</b>",
-            "1. Товары — категория и модели",
-            "2. Цена, Город и (для смартфонов) Память",
-            "3. Включить уведомления",
-            "",
-        ]
-    status = [
-        f"Уведомления: <b>{sub}</b>",
-        f"Категория: <b>{category_label(user.get('product_category'))}</b>",
-        f"Модели: <b>{models_n}</b> {model_word}",
-    ]
+    bell = "🔔 Вкл" if active else "🔕 Пауза"
+    cat = category_label(user.get("product_category"))
+    line1 = f"{bell} · {cat} · {models_n} {_plural_models(models_n)}"
+    line2 = f"до {format_price(max_p)} · {city_label(user.get('city'))}"
     if is_phones_category(user.get("product_category")):
-        status.append(f"Память: <b>{_memory_display(user.get('memory_volumes'))}</b>")
-    status += [
-        f"Цена: до <b>{format_price(max_p)}</b>",
-        f"Город: <b>{city_label(user.get('city'))}</b>",
-    ]
-    lines += status
+        mem = (user.get("memory_volumes") or list(DEFAULT_MEMORY_VOLUMES))
+        mem_txt = ", ".join(format_memory_volume(v, short=True) for v in mem)
+        line2 += f" · {mem_txt}"
+
+    lines = ["<b>Kufi</b>", "поиск техники на Kufar", "", line1, line2]
+    if is_new:
+        step2 = "2. Цена, город и память" if is_phones_category(
+            user.get("product_category")
+        ) else "2. Цена и город"
+        lines += [
+            "",
+            "1. Товары — категория и модели",
+            step2,
+            "3. Включить уведомления",
+        ]
 
     mode = user.get("vip_feed_mode") or "normal"
     if user.get("role") == "vip":
@@ -162,17 +142,12 @@ def home_text(user: dict | None, *, is_new: bool) -> str:
         elif mode == "exchange":
             lines += ["", "Поток: <b>только обмен</b>"]
         elif mode == "ideal":
-            lines += ["", "Поток: <b>идеальные (бета)</b>"]
+            lines += ["", "Поток: <b>идеальные</b>"]
 
     if models_n == 0:
         lines += ["", "Сначала выберите модели в «Товары»."]
-
-    if not active:
-        lines += [
-            "",
-            "Уведомления выключены — объявления не приходят.",
-            "Нажмите «Включить уведомления».",
-        ]
+    elif not active:
+        lines += ["", "Уведомления выключены."]
 
     return "\n".join(lines)
 
@@ -192,19 +167,21 @@ def _plural_models(n: int) -> str:
 def home_keyboard(*, is_admin: bool, user: dict | None = None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if user and user.get("active"):
-        rows.append(
-            [InlineKeyboardButton(text="🔕 Пауза", callback_data="nav:stop")]
-        )
+        rows.append([InlineKeyboardButton(text="🔕 Пауза", callback_data="nav:stop")])
     elif user:
         rows.append(
-            [InlineKeyboardButton(text="🔔 Включить уведомления", callback_data="nav:resume")]
+            [InlineKeyboardButton(text="🔔 Включить", callback_data="nav:resume")]
         )
     rows.append([InlineKeyboardButton(text="📱 Товары", callback_data="nav:goods")])
-    filter_row = [InlineKeyboardButton(text="💰 Цена", callback_data="nav:price")]
+    filter_row = [
+        InlineKeyboardButton(text="💰 Цена", callback_data="nav:price"),
+        InlineKeyboardButton(text="📍 Город", callback_data="nav:city"),
+    ]
     if is_phones_category((user or {}).get("product_category")):
-        filter_row.append(InlineKeyboardButton(text="💾 Память", callback_data="nav:memory"))
+        filter_row.append(
+            InlineKeyboardButton(text="💾 Память", callback_data="nav:memory")
+        )
     rows.append(filter_row)
-    rows.append([InlineKeyboardButton(text="📍 Город", callback_data="nav:city")])
     rows.append(
         [
             InlineKeyboardButton(text="⭐ VIP", callback_data="nav:vip"),
@@ -212,7 +189,9 @@ def home_keyboard(*, is_admin: bool, user: dict | None = None) -> InlineKeyboard
         ]
     )
     if is_admin:
-        rows.append([InlineKeyboardButton(text="🔐 Админ-панель", callback_data="nav:admin")])
+        rows.append(
+            [InlineKeyboardButton(text="🔐 Админ-панель", callback_data="nav:admin")]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -226,21 +205,16 @@ def vip_text(user: dict | None) -> str:
         elif mode == "exchange":
             lines += ["", "Поток: <b>только обмен</b>"]
         elif mode == "ideal":
-            lines += [
-                "",
-                "Поток: <b>идеальные (бета)</b>",
-                "Б/у на Kufar — ок. Плохие состояния — нет. АКБ ≥ 75%, без поломок и замен.",
-            ]
+            lines += ["", "Поток: <b>идеальные</b>"]
         else:
             lines += ["", "Поток: <b>обычная рассылка</b>"]
-        lines += ["", "Потоки — по выбранным моделям и памяти. Кнопки ниже."]
     else:
         lines += [
             "",
             "Что даёт VIP:",
             "• без лимита моделей",
-            "• фильтры качества",
-            "• потоки: ниже рынка, обмен, идеальные — по вашим моделям и памяти",
+            "• сразу, без мусора",
+            "• ниже рынка, обмен, идеальные",
             "",
             f"Цена: <b>{VIP_PRICE_USD}$</b> / 30 дней · @manohio",
             "Промокод — кнопка ниже.",
@@ -264,7 +238,7 @@ def vip_keyboard(user: dict | None) -> InlineKeyboardMarkup:
         mode = user.get("vip_feed_mode") or "normal"
         bm = "🔥 Ниже рынка ✅" if mode == "below_market" else "🔥 Ниже рынка"
         ex = "🔄 Обмен ✅" if mode == "exchange" else "🔄 Обмен"
-        idl = "✨ Идеальные (бета) ✅" if mode == "ideal" else "✨ Идеальные (бета)"
+        idl = "✨ Идеальные ✅" if mode == "ideal" else "✨ Идеальные"
         rows.append(
             [
                 InlineKeyboardButton(text=bm, callback_data="nav:vipf:bm"),
@@ -275,12 +249,6 @@ def vip_keyboard(user: dict | None) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=idl, callback_data="nav:vipf:ideal")]
         )
     rows.append([InlineKeyboardButton(text="🎟 Промокод", callback_data="nav:promo")])
-    rows.append(
-        [
-            InlineKeyboardButton(text="🔒 Политика", url=PRIVACY_POLICY_URL),
-            InlineKeyboardButton(text="📄 Оферта", url=TERMS_OF_SERVICE_URL),
-        ]
-    )
     rows.append(back_row())
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -288,15 +256,14 @@ def vip_keyboard(user: dict | None) -> InlineKeyboardMarkup:
 def memory_screen_text(user: dict | None) -> str:
     vols = (user or {}).get("memory_volumes") or list(DEFAULT_MEMORY_VOLUMES)
     selected = _memory_display(vols)
-    if user and user.get("role") == "vip":
-        limit = "VIP: можно выбрать несколько объёмов."
-    else:
-        limit = "Обычный аккаунт: один объём (новый заменяет прежний)."
+    limit = (
+        "VIP: можно несколько объёмов."
+        if user and user.get("role") == "vip"
+        else "Обычный аккаунт: один объём."
+    )
     return (
         "💾 <b>Память</b>\n\n"
         f"Сейчас: <b>{selected}</b>\n\n"
-        "Пришлём объявления с этим объёмом. "
-        "Если память в объявлении не указана — подойдёт любое.\n\n"
         f"{limit}"
     )
 
@@ -325,11 +292,7 @@ def memory_keyboard(user: dict | None) -> InlineKeyboardMarkup:
 
 def city_screen_text(user: dict | None) -> str:
     current = city_label((user or {}).get("city"))
-    return (
-        "📍 <b>Город</b>\n\n"
-        f"Сейчас: <b>{current}</b>\n\n"
-        "Искать объявления в этом городе."
-    )
+    return f"📍 <b>Город</b>\n\nСейчас: <b>{current}</b>"
 
 
 def city_keyboard(user: dict | None) -> InlineKeyboardMarkup:
@@ -363,17 +326,13 @@ def price_screen_text(user: dict | None) -> str:
     return (
         f"💰 <b>Цена</b>\n\n"
         f"Сейчас: {cur_txt}\n\n"
-        f"Пришлём только объявления не дороже этой суммы в {CURRENCY_SIGN}."
+        f"Не дороже этой суммы."
         f"{extra}"
     )
 
 
 def promo_prompt_text() -> str:
-    return (
-        "🎟 <b>Промокод</b>\n\n"
-        "Отправьте код одним сообщением.\n"
-        "VIP включится сразу после проверки."
-    )
+    return "🎟 <b>Промокод</b>\n\nОтправьте код одним сообщением."
 
 
 def promo_back_keyboard() -> InlineKeyboardMarkup:

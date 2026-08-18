@@ -83,12 +83,12 @@ def format_ad(
 
     parts: list[str] = []
     if ideal_feed:
-        parts.append("✨ <b>Идеальные (бета)</b>")
+        parts.append("✨ <b>Идеальные</b>")
         parts.append("")
     elif below_market:
-        parts.append("🔥 <b>Ниже рыночной цены</b>")
+        parts.append("🔥 <b>Ниже рынка</b>")
         parts.append("")
-    parts.append(f"📱 <b>{title}</b>")
+    parts.append(f"<b>{title}</b>")
     parts.append(f"💰 <b>{_esc(price_str)}</b>")
     if market_avg_price is not None:
         parts.append(f"📊 Средняя на Kufar · <b>{format_price(market_avg_price)}</b>")
@@ -129,13 +129,13 @@ def format_status(user: dict) -> str:
         elif mode == "exchange":
             vip_feed = "\n🔄 <b>Поток:</b> только обмен"
         elif mode == "ideal":
-            vip_feed = "\n✨ <b>Поток:</b> идеальные (бета)"
+            vip_feed = "\n✨ <b>Поток:</b> идеальные"
 
     paused = ""
     if not user.get("active"):
         paused = (
             "\n\n💤 <b>Уведомления на паузе</b>\n"
-            "Включите · <b>«Включить уведомления»</b> или <code>/start</code>"
+            "Включите · <b>«Включить»</b> или <code>/start</code>"
         )
 
     cid = user.get("chat_id")
