@@ -71,18 +71,28 @@ class CatalogParamsTests(unittest.TestCase):
         self.assertIn("30", ppm)
         self.assertIn("35", ppm)
 
-    def test_unmapped_model_fallback_query(self) -> None:
+    def test_unmapped_model_skipped_no_query(self) -> None:
         rows = catalog_search_params(
             "minsk",
             ["iphone 15", "not-a-real-phone"],
             ["64"],
         )
-        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(rows), 1)
         self.assertIn("phm", rows[0])
         self.assertNotIn("query", rows[0])
-        self.assertEqual(rows[1]["query"], "not-a-real-phone")
-        self.assertEqual(rows[1]["ppm"], "v.or:15")
-        self.assertNotIn("phm", rows[1])
+        self.assertEqual(
+            catalog_search_params("minsk", ["not-a-real-phone"], ["64"]),
+            [],
+        )
+
+    def test_full_catalog_one_phm_request(self) -> None:
+        from config import DEVICE_CATALOG
+
+        rows = catalog_search_params("minsk", DEVICE_CATALOG, ["256"])
+        self.assertEqual(len(rows), 1)
+        self.assertNotIn("query", rows[0])
+        self.assertTrue(rows[0]["phm"].startswith("v.or:"))
+        self.assertIn("4500", rows[0]["phm"])
 
 
 class FetchKeyTests(unittest.TestCase):
@@ -189,6 +199,46 @@ class CatalogFilterTests(unittest.TestCase):
                 thin_junk=True,
             )
         )
+
+
+class CatalogMatchSafetyTests(unittest.TestCase):
+    def test_other_brands_rejected_when_apple_samsung_selected(self) -> None:
+        from user_matching import match_ads_for_user
+
+        user = {
+            "chat_id": 1,
+            "role": "regular",
+            "keywords": list(
+                [
+                    "iphone 15",
+                    "samsung galaxy s24",
+                ]
+            ),
+            "memory_volumes": ["256"],
+            "max_price": 2000,
+        }
+        ads = [
+            {
+                "title": "Xiaomi Redmi Note 13 256",
+                "summary": "",
+                "price": 400,
+                "company_ad": False,
+            },
+            {
+                "title": "Honor 90 256Gb",
+                "summary": "",
+                "price": 350,
+                "company_ad": False,
+            },
+            {
+                "title": "iPhone 15 256",
+                "summary": "Модель: iPhone 15",
+                "price": 800,
+                "company_ad": False,
+            },
+        ]
+        matched = match_ads_for_user(user, ads, {})
+        self.assertEqual([ad["title"] for ad in matched], ["iPhone 15 256"])
 
 
 class NormalizeListingTests(unittest.TestCase):

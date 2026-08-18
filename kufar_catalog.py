@@ -2,6 +2,7 @@
 
 Параметры сняты с GET search-api/v2/search/rendered-paginated (не HTML).
 Мультивыбор: phm=v.or:6085,6087 и ppm=v.or:20,25.
+query= не используем: это полнотекст, а не фильтр модели.
 """
 from __future__ import annotations
 
@@ -108,6 +109,9 @@ PHM_BY_MODEL: dict[str, tuple[int, ...]] = {
     "samsung galaxy z flip 4": (5773,),
     "samsung galaxy z flip 5": (6161,),
     "samsung galaxy z flip 6": (6162,),
+    # На витрине пока нет отдельного phm — общий «Galaxy Z Flip».
+    "samsung galaxy z flip 7": (4500,),
+    "samsung galaxy z flip 7 fe": (4500,),
     "samsung galaxy z fold": (2530,),
     "samsung galaxy z fold 2": (4510,),
     "samsung galaxy z fold 3": (5605,),
@@ -185,31 +189,24 @@ def catalog_search_params(
     models: list[str] | tuple[str, ...],
     memories: list[str] | tuple[str, ...],
 ) -> list[dict[str, str]]:
-    """Facet-параметры для search-api. Несколько dict — если есть fallback query."""
+    """Facet-параметры для search-api. Без query: на Kufar это полнотекст, не фильтр модели."""
     rgn = str(city_rgn(city))
     ppm = or_facet(_memory_ppm_ids(memories))
     phm_ids, missing = _split_models(models)
     for name in missing:
-        log.warning("kufar catalog: no phm for model %r, fallback query", name)
+        log.warning("kufar catalog: no phm for model %r, skip", name)
+    if not phm_ids:
+        return []
 
-    base: dict[str, str] = {
+    row: dict[str, str] = {
         "cat": str(KUFAR_PHONE_CAT),
         "ot": str(KUFAR_PRIVATE_OT),
         "rgn": rgn,
+        "phm": or_facet(phm_ids),
     }
     if ppm:
-        base["ppm"] = ppm
-
-    out: list[dict[str, str]] = []
-    if phm_ids:
-        row = dict(base)
-        row["phm"] = or_facet(phm_ids)
-        out.append(row)
-    for name in missing:
-        row = dict(base)
-        row["query"] = name
-        out.append(row)
-    return out
+        row["ppm"] = ppm
+    return [row]
 
 
 FetchKey = tuple[str, tuple[str, ...], tuple[str, ...]]
