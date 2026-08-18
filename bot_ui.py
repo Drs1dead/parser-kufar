@@ -37,7 +37,7 @@ HELP_TEXT = (
     "🔔 Включены — новые объявления в чат\n"
     "🔕 Пауза — временно ничего не присылать\n\n"
     "⭐ <b>VIP</b> — больше моделей, особые потоки, промокод, приглашение друзей\n\n"
-    "📰 Новости — <a href='https://t.me/kufarsup'>@kufarsup</a>"
+    "📰 Новости — <a href='https://t.me/kufiBY'>@KufiBY</a>"
 )
 
 
@@ -76,7 +76,7 @@ def referral_link_for_user(user: dict | None) -> str:
     chat_id = user.get("chat_id")
     if chat_id is None:
         return ""
-    code = ensure_referral_code(int(chat_id))
+    code = ensure_referral_code(int(chat_id), user=user)
     if not code:
         return ""
     return f"https://t.me/{BOT_USERNAME}?start=ref_{code}"
@@ -105,7 +105,7 @@ def home_text(user: dict | None, *, is_new: bool) -> str:
             "👋 <b>Добро пожаловать!</b>\n\n"
             "Бот помогает находить телефоны на <b>Kufar.by</b>.\n"
             f"Цены — в белорусских рублях (<b>{CURRENCY_SIGN}</b>).\n\n"
-            "Напишите любое сообщение — откроется меню."
+            "Нажмите <code>/start</code>."
         )
 
     active = user.get("active")

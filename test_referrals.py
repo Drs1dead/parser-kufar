@@ -43,7 +43,7 @@ class ReferralTests(unittest.TestCase):
         assert referrer is not None
         code = referrer["referral_code"]
         self.assertTrue(db.add_user(200, username="bob"))
-        self.assertTrue(db.process_referral_signup(200, code))
+        self.assertEqual(db.process_referral_signup(200, code), 100)
         self.assertEqual(db.count_referrals(100), 1)
         friend = db.get_user(200)
         assert friend is not None
@@ -57,20 +57,20 @@ class ReferralTests(unittest.TestCase):
         db.add_user(100)
         code = db.get_user(100)["referral_code"]  # type: ignore[index]
         db.add_user(200)
-        self.assertTrue(db.process_referral_signup(200, code))
-        self.assertFalse(db.process_referral_signup(200, code))
+        self.assertEqual(db.process_referral_signup(200, code), 100)
+        self.assertIsNone(db.process_referral_signup(200, code))
         self.assertEqual(db.count_referrals(100), 1)
 
     def test_self_referral_rejected(self) -> None:
         db.add_user(100)
         code = db.get_user(100)["referral_code"]  # type: ignore[index]
-        self.assertFalse(db.process_referral_signup(100, code))
+        self.assertIsNone(db.process_referral_signup(100, code))
         self.assertEqual(db.count_referrals(100), 0)
 
     def test_invalid_code(self) -> None:
         db.add_user(100)
         db.add_user(200)
-        self.assertFalse(db.process_referral_signup(200, "NO_SUCH_CODE"))
+        self.assertIsNone(db.process_referral_signup(200, "NO_SUCH_CODE"))
         self.assertEqual(db.count_referrals(100), 0)
 
     def test_grant_vip_days_extends_existing(self) -> None:

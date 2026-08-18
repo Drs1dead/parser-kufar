@@ -26,7 +26,6 @@ from db import (
     count_seen,
     expire_all_vip,
     get_active_users,
-    get_user,
     increment_sent,
     mark_seen,
     prune_price_tables,
@@ -112,7 +111,8 @@ async def _send_ad(
     market_avg_price: int | None = None,
     below_market: bool = False,
     ideal_feed: bool = False,
-) -> bool:
+) -> tuple[bool, bool]:
+    """(доставлено, пользователь отключён — блокировка бота)."""
     text = truncate_ad_caption(
         format_ad(
             ad,
@@ -145,34 +145,34 @@ async def _send_ad(
 
     try:
         await _deliver()
-        return True
+        return True, False
     except TelegramRetryAfter as e:
         log.warning("send flood_wait chat_id=%s sec=%s", chat_id, e.retry_after)
         await asyncio.sleep(e.retry_after + 1)
         try:
             await _deliver()
-            return True
+            return True, False
         except Exception as exc:
             log_exception(log, "send retry failed chat_id=%s: %s", chat_id, exc)
-            return False
+            return False, False
     except TelegramForbiddenError:
         log.info("user blocked bot chat_id=%s — subscription off", chat_id)
         set_active(chat_id, False)
-        return False
+        return False, True
     except TelegramBadRequest as exc:
         log.warning("send bad_request chat_id=%s: %s", chat_id, exc)
         if photos:
             try:
                 await _deliver_text()
-                return True
+                return True, False
             except Exception as fallback_exc:
                 log_exception(
                     log, "send text fallback failed chat_id=%s: %s", chat_id, fallback_exc
                 )
-        return False
+        return False, False
     except Exception as exc:
         log_exception(log, "send failed chat_id=%s: %s", chat_id, exc)
-        return False
+        return False, False
 
 
 async def _process_user(
@@ -221,7 +221,9 @@ async def _process_user(
         need_desc = [
             ad
             for ad in to_send
-            if not (ad.get("description") or "").strip() and ad.get("link")
+            if ad.get("link")
+            and ad["link"] not in already_seen
+            and not (ad.get("description") or "").strip()
         ]
         if need_desc:
             await enrich_ads_descriptions(need_desc)
@@ -249,7 +251,7 @@ async def _process_user(
         ):
             below_market = True
 
-        ok = await _send_ad(
+        ok, deactivated = await _send_ad(
             bot,
             chat_id,
             ad,
@@ -269,11 +271,10 @@ async def _process_user(
             ):
                 save_market_price(ad["link"], device_key, price)
             await asyncio.sleep(0.05)
+        elif deactivated:
+            user["active"] = False
+            break
         else:
-            fresh = get_user(chat_id)
-            if fresh is None or not fresh.get("active"):
-                # Бот заблокирован — дальше не шлём в этом цикле
-                break
             log.warning(
                 "send not delivered chat_id=%s link=%s",
                 chat_id,
@@ -297,19 +298,33 @@ async def _process_user(
 
 
 async def poller(bot: Bot) -> None:
+    # Тяжёлые операции (expire/prune) не обязательно делать каждый цикл.
+    # Это снижает нагрузку на SQLite при большом количестве пользователей.
+    last_expire_at = 0.0
+    last_prune_at = 0.0
+    expire_every_s = max(60.0, CHECK_INTERVAL)  # не чаще раза в минуту
+    prune_every_s = max(600.0, CHECK_INTERVAL * 10)  # примерно раз в 10 минут
+
     while True:
         try:
-            expired = await asyncio.to_thread(expire_all_vip)
-            if expired:
-                await _notify_vip_expired(bot, expired)
-            pruned = await asyncio.to_thread(prune_price_tables)
-            if pruned[0] or pruned[1]:
-                log.debug(
-                    "price tables pruned market=%s sent=%s", pruned[0], pruned[1]
-                )
-            seen_pruned = await asyncio.to_thread(prune_seen_ads)
-            if seen_pruned:
-                log.debug("seen_ads pruned deleted=%s", seen_pruned)
+            now = time.time()
+            if now - last_expire_at >= expire_every_s:
+                expired = await asyncio.to_thread(expire_all_vip)
+                last_expire_at = now
+                if expired:
+                    await _notify_vip_expired(bot, expired)
+
+            if now - last_prune_at >= prune_every_s:
+                pruned = await asyncio.to_thread(prune_price_tables)
+                if pruned[0] or pruned[1]:
+                    log.debug(
+                        "price tables pruned market=%s sent=%s", pruned[0], pruned[1]
+                    )
+                seen_pruned = await asyncio.to_thread(prune_seen_ads)
+                if seen_pruned:
+                    log.debug("seen_ads pruned deleted=%s", seen_pruned)
+                last_prune_at = now
+
             users = await asyncio.to_thread(get_active_users, expire_vip=False)
             if not users:
                 log.debug("poll skip — no active subscribers")

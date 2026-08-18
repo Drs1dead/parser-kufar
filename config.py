@@ -11,7 +11,8 @@ _display_tz_name = os.getenv("DISPLAY_TIMEZONE", "Europe/Minsk").strip() or "Eur
 try:
     DISPLAY_TZ = ZoneInfo(_display_tz_name)
 except Exception:
-    DISPLAY_TZ = ZoneInfo("Europe/Minsk")
+    # Без пакета tzdata (часто Windows) — UTC; pip install tzdata для Europe/Minsk.
+    DISPLAY_TZ = timezone.utc
 
 
 def format_local_datetime(ts: int | float, *, fmt: str = "%d.%m.%Y %H:%M") -> str:

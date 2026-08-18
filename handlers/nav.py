@@ -39,15 +39,17 @@ from bot_ui import (
     vip_text,
 )
 from handlers.admin import admin_home_text, admin_main_keyboard
-from handlers.goods_ui import _is_vip_user
 from handlers.helpers import (
     actor_user_id,
     is_admin,
-    maybe_refresh_username,
+    is_vip_user,
+    load_user_from_message,
+    flush_screen,
     require_user_cb,
+    safe_cb_answer,
     safe_edit_message,
+    sync_username_from_callback,
 )
-from handlers.start import present_home
 from handlers.states import CustomPriceState, PromoCodeState
 from logging_setup import log_exception
 
@@ -67,7 +69,7 @@ def price_presets_keyboard(user: dict | None) -> InlineKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
-    if _is_vip_user(user):
+    if is_vip_user(user):
         rows.append([InlineKeyboardButton(text="🎯 Своя цена (VIP)", callback_data="nav:price:custom")])
     rows.append(back_row())
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -78,7 +80,6 @@ async def on_memory_toggle(cb: CallbackQuery) -> None:
     if cb.message is None:
         await cb.answer()
         return
-    maybe_refresh_username(cb.message.chat.id, cb.from_user)
     user = await require_user_cb(cb)
     if user is None:
         return
@@ -90,7 +91,7 @@ async def on_memory_toggle(cb: CallbackQuery) -> None:
 
     current = list(user.get("memory_volumes") or DEFAULT_MEMORY_VOLUMES)
     selected = set(current)
-    if _is_vip_user(user):
+    if is_vip_user(user):
         if vol in selected:
             if len(selected) <= 1:
                 await cb.answer("Нельзя снять последний объём (минимум 64 GB)", show_alert=True)
@@ -103,12 +104,12 @@ async def on_memory_toggle(cb: CallbackQuery) -> None:
         new_vols = [vol]
 
     user["memory_volumes"] = update_memory_volumes(chat_id, new_vols)
-    await safe_edit_message(
+    await flush_screen(
         cb,
         memory_screen_text(user),
         reply_markup=memory_keyboard(user),
+        notice="💾 Сохранено",
     )
-    await cb.answer("💾 Сохранено")
 
 
 @router.callback_query(lambda c: (c.data or "").startswith("nav:"))
@@ -121,8 +122,9 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
     data = (cb.data or "").strip()
     parts = data.split(":")
 
-    maybe_refresh_username(chat_id, cb.from_user)
     user = get_user(chat_id)
+    if user is not None:
+        sync_username_from_callback(user, cb)
     user_is_admin = is_admin(uid)
 
     try:
@@ -136,8 +138,7 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
                     reply_markup=None,
                 )
                 return
-            await cb.answer()
-            await safe_edit_message(
+            await flush_screen(
                 cb,
                 home_text(user, is_new=False),
                 reply_markup=home_keyboard(is_admin=user_is_admin, user=user),
@@ -161,11 +162,11 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
             set_active(chat_id, True)
             log.debug("resume chat_id=%s", chat_id)
             user["active"] = True
-            await cb.answer("🔔 Уведомления включены")
-            await safe_edit_message(
+            await flush_screen(
                 cb,
                 home_text(user, is_new=False),
                 reply_markup=home_keyboard(is_admin=user_is_admin, user=user),
+                notice="🔔 Уведомления включены",
             )
             return
 
@@ -182,11 +183,6 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
                 new_mode = "normal" if cur == "ideal" else "ideal"
             update_vip_feed_mode(chat_id, new_mode)
             user["vip_feed_mode"] = new_mode
-            await safe_edit_message(
-                cb,
-                vip_text(user),
-                reply_markup=vip_keyboard(user),
-            )
             hint = (
                 "🔥 Поток «ниже рынка»"
                 if new_mode == "below_market"
@@ -200,101 +196,99 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
                     )
                 )
             )
-            await cb.answer(hint)
+            await flush_screen(
+                cb,
+                vip_text(user),
+                reply_markup=vip_keyboard(user),
+                notice=hint,
+            )
             return
 
         if data == "nav:goods":
-            await safe_edit_message(
+            await flush_screen(
                 cb,
                 goods_category_text(),
                 reply_markup=goods_category_keyboard(),
             )
-            await cb.answer()
             return
 
         if data == "nav:price":
             await state.clear()
-            await safe_edit_message(
+            await flush_screen(
                 cb,
                 price_screen_text(user),
                 reply_markup=price_presets_keyboard(user),
             )
-            await cb.answer()
             return
 
         if data == "nav:memory":
             await state.clear()
-            await safe_edit_message(
+            await flush_screen(
                 cb,
                 memory_screen_text(user),
                 reply_markup=memory_keyboard(user),
             )
-            await cb.answer()
             return
 
         if data == "nav:price:custom":
-            if not _is_vip_user(user):
+            if not is_vip_user(user):
                 await cb.answer("Только для VIP", show_alert=True)
                 return
             await state.set_state(CustomPriceState.waiting_price)
-            await safe_edit_message(
+            await flush_screen(
                 cb,
                 custom_price_prompt_text(),
                 reply_markup=back_keyboard(),
             )
-            await cb.answer()
             return
 
         if len(parts) == 3 and parts[0] == "nav" and parts[1] == "set" and parts[2].isdigit():
             price = int(parts[2])
             if 1 <= price <= 10_000_000:
                 user["max_price"] = update_max_price(chat_id, price)
-            await safe_edit_message(
+            await flush_screen(
                 cb,
                 price_screen_text(user),
                 reply_markup=price_presets_keyboard(user),
+                notice="💰 Лимит сохранён",
             )
-            await cb.answer("💰 Лимит сохранён")
             return
 
         if data == "nav:promo":
             await state.set_state(PromoCodeState.waiting_code)
-            await safe_edit_message(
+            await flush_screen(
                 cb,
                 promo_prompt_text(),
                 reply_markup=promo_back_keyboard(),
             )
-            await cb.answer()
             return
 
         if data == "nav:vip":
-            await safe_edit_message(
+            await flush_screen(
                 cb,
                 vip_text(user),
                 reply_markup=vip_keyboard(user),
             )
-            await cb.answer()
             return
 
         if data == "nav:help":
-            await safe_edit_message(
+            await flush_screen(
                 cb,
                 HELP_TEXT,
                 reply_markup=back_keyboard(),
             )
-            await cb.answer()
             return
 
         if data == "nav:stop":
             set_active(chat_id, False)
             log.debug("stop chat_id=%s", chat_id)
             user["active"] = False
-            await safe_edit_message(
+            await flush_screen(
                 cb,
                 home_text(user, is_new=False),
                 reply_markup=home_keyboard(is_admin=user_is_admin, user=user),
+                notice="🔕 На паузе",
             )
-            await cb.answer("🔕 На паузе")
             return
 
         if data == "nav:admin":
@@ -302,31 +296,28 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
                 await cb.answer("Нет доступа", show_alert=True)
                 return
             await state.clear()
-            await safe_edit_message(
+            await flush_screen(
                 cb,
                 admin_home_text(),
                 reply_markup=admin_main_keyboard(),
             )
-            await cb.answer()
             return
 
         await cb.answer("Неизвестное действие", show_alert=True)
     except Exception:
         log_exception(log, "nav error data=%s", data)
-        try:
-            await cb.answer("Ошибка", show_alert=True)
-        except Exception:
-            pass
+        await safe_cb_answer(cb, "Не удалось обновить меню", show_alert=True)
+
+
 @router.message(CustomPriceState.waiting_price, F.text, ~F.text.startswith("/"))
 async def on_custom_price_text(msg: Message, state: FSMContext) -> None:
     chat_id = msg.chat.id
-    maybe_refresh_username(chat_id, msg.from_user)
-    user = get_user(chat_id)
+    user = load_user_from_message(msg)
     if user is None:
         await state.clear()
         await msg.answer("Сначала нажми <code>/start</code>.", parse_mode=ParseMode.HTML)
         return
-    if not _is_vip_user(user):
+    if not is_vip_user(user):
         await state.clear()
         await msg.answer("Индивидуальная цена доступна только для VIP.", parse_mode=ParseMode.HTML)
         return
@@ -358,8 +349,7 @@ async def on_custom_price_text(msg: Message, state: FSMContext) -> None:
 @router.message(PromoCodeState.waiting_code, F.text, ~F.text.startswith("/"))
 async def on_promo_code_text(msg: Message, state: FSMContext) -> None:
     chat_id = msg.chat.id
-    maybe_refresh_username(chat_id, msg.from_user)
-    user = get_user(chat_id)
+    user = load_user_from_message(msg)
     if user is None:
         await state.clear()
         await msg.answer(
@@ -372,11 +362,11 @@ async def on_promo_code_text(msg: Message, state: FSMContext) -> None:
     if status == "ok" and days is not None:
         set_vip(chat_id, days=days)
         await state.clear()
-        updated_user = get_user(chat_id)
+        user = get_user(chat_id) or user
         uid = actor_user_id(msg)
         await msg.answer(
             f"🎉 Промокод принят! VIP на <b>{days}</b> дн. — настройте бот в меню.",
-            reply_markup=home_keyboard(is_admin=is_admin(uid), user=updated_user),
+            reply_markup=home_keyboard(is_admin=is_admin(uid), user=user),
             parse_mode=ParseMode.HTML,
         )
         return

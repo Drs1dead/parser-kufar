@@ -79,7 +79,6 @@ _USER_SELECT = (
     "poll_last_vip, poll_last_regular"
 )
 
-
 def _row_to_user(row: tuple) -> dict:
     return {
         "chat_id": row[0],
@@ -329,11 +328,15 @@ def _backfill_referral_codes() -> None:
 
 
 def update_user_username(chat_id: int, username: str | None) -> None:
-    """Telegram @username без «@»; пусто — сброс."""
-    _execute(
-        "UPDATE users SET username = ? WHERE chat_id = ?",
-        (_norm_username(username), chat_id),
-    )
+    """Telegram @username без «@»; пусто — сброс. Без записи, если значение не изменилось."""
+    new = _norm_username(username)
+    cur = _execute("SELECT username FROM users WHERE chat_id = ?", (chat_id,))
+    row = cur.fetchone()
+    if row is None:
+        return
+    if (row[0] or "") == new:
+        return
+    _execute("UPDATE users SET username = ? WHERE chat_id = ?", (new, chat_id))
 
 
 def add_user(chat_id: int, *, username: str | None = None) -> bool:
@@ -364,7 +367,15 @@ def add_user(chat_id: int, *, username: str | None = None) -> bool:
             (u, chat_id),
         )
     else:
-        _execute("UPDATE users SET username = ? WHERE chat_id = ?", (u, chat_id))
+        cur = _execute(
+            "SELECT username FROM users WHERE chat_id = ?", (chat_id,)
+        )
+        old = (cur.fetchone() or ("",))[0] or ""
+        if old != u:
+            _execute(
+                "UPDATE users SET username = ? WHERE chat_id = ?",
+                (u, chat_id),
+            )
     return False
 
 
@@ -377,6 +388,7 @@ def set_active(chat_id: int, active: bool) -> None:
 
 def get_user(chat_id: int) -> Optional[dict]:
     _expire_vip(chat_id)
+
     cur = _execute(
         f"SELECT {_USER_SELECT} FROM users WHERE chat_id = ?",
         (chat_id,),
@@ -462,18 +474,30 @@ def update_memory_volumes(chat_id: int, volumes: list[str]) -> list[str]:
     return normalized
 
 
-def ensure_referral_code(chat_id: int) -> str:
-    user = get_user(chat_id)
-    if user is None:
-        return ""
-    code = (user.get("referral_code") or "").strip()
-    if code:
-        return code
+def ensure_referral_code(chat_id: int, *, user: dict | None = None) -> str:
+    """Реферальный код пользователя; при необходимости создаёт без полного get_user."""
+    if user is not None:
+        code = (user.get("referral_code") or "").strip()
+        if code:
+            return code
+    else:
+        cur = _execute(
+            "SELECT referral_code FROM users WHERE chat_id = ?",
+            (chat_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return ""
+        code = (row[0] or "").strip()
+        if code:
+            return code
     code = _generate_referral_code()
     _execute(
         "UPDATE users SET referral_code = ? WHERE chat_id = ?",
         (code, chat_id),
     )
+    if user is not None:
+        user["referral_code"] = code
     return code
 
 
@@ -503,20 +527,20 @@ def grant_vip_days(chat_id: int, days: int) -> None:
     set_vip(chat_id, days=max(1, int(days)))
 
 
-def process_referral_signup(new_chat_id: int, ref_code: str) -> bool:
-    """Начисляет VIP-дни пригласившему за нового друга. True если бонус выдан."""
+def process_referral_signup(new_chat_id: int, ref_code: str) -> int | None:
+    """Начисляет VIP-дни пригласившему. Возвращает chat_id пригласившего или None."""
     referrer = get_user_by_referral_code(ref_code)
     if referrer is None:
-        return False
+        return None
     referrer_id = int(referrer["chat_id"])
     if referrer_id == new_chat_id:
-        return False
+        return None
     cur = _execute(
         "SELECT 1 FROM referrals WHERE referred_chat_id = ?",
         (new_chat_id,),
     )
     if cur.fetchone() is not None:
-        return False
+        return None
     now = int(time.time())
     try:
         _execute(
@@ -525,7 +549,7 @@ def process_referral_signup(new_chat_id: int, ref_code: str) -> bool:
             (new_chat_id, referrer_id, now),
         )
     except sqlite3.IntegrityError:
-        return False
+        return None
     _execute(
         "UPDATE users SET referred_by = ? WHERE chat_id = ? AND referred_by IS NULL",
         (referrer_id, new_chat_id),
@@ -537,19 +561,7 @@ def process_referral_signup(new_chat_id: int, ref_code: str) -> bool:
         new_chat_id,
         REFERRAL_VIP_DAYS_PER_FRIEND,
     )
-    return True
-
-
-def reset_user_filters(chat_id: int) -> None:
-    _execute(
-        "UPDATE users SET max_price = ?, keywords = ?, memory_volumes = ? WHERE chat_id = ?",
-        (
-            DEFAULT_MAX_PRICE,
-            ",".join(DEFAULT_KEYWORDS),
-            _memory_csv(list(DEFAULT_MEMORY_VOLUMES)),
-            chat_id,
-        ),
-    )
+    return referrer_id
 
 
 def seen_links_for(chat_id: int, links: list[str]) -> set[str]:
@@ -668,7 +680,12 @@ def close() -> None:
 
 
 def set_vip(chat_id: int, *, days: int = VIP_SUBSCRIPTION_DAYS) -> None:
-    ensure_referral_code(chat_id)
+    cur_ref = _execute(
+        "SELECT referral_code FROM users WHERE chat_id = ?", (chat_id,)
+    )
+    ref_row = cur_ref.fetchone()
+    if ref_row is not None and not (ref_row[0] or "").strip():
+        ensure_referral_code(chat_id)
     now = int(time.time())
     add_seconds = max(1, days) * 24 * 60 * 60
     cur = _execute(

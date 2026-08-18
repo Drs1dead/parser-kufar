@@ -29,6 +29,7 @@ from handlers.helpers import (
     actor_user_id,
     format_user_status_html,
     is_admin,
+    safe_cb_answer,
     safe_edit_message,
 )
 from handlers.states import AdminPromoState, AdminUserSearchState, AdminVipGrantState
@@ -244,8 +245,10 @@ def _promo_codes_list_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _show_admin_user_card(cb: CallbackQuery, target_id: int) -> None:
-    u = get_user(target_id)
+async def _show_admin_user_card(
+    cb: CallbackQuery, target_id: int, user: dict | None = None
+) -> None:
+    u = user if user is not None else get_user(target_id)
     if u is None:
         await cb.answer("Не найден", show_alert=True)
         return
@@ -381,10 +384,11 @@ async def on_admin_callback(cb: CallbackQuery, state: FSMContext) -> None:
 
         if len(parts) == 3 and parts[0] == "adm" and parts[1] == "u" and parts[2].lstrip("-").isdigit():
             target_id = int(parts[2])
-            if get_user(target_id) is None:
+            u = get_user(target_id)
+            if u is None:
                 await cb.answer("Пользователь не найден", show_alert=True)
                 return
-            await _show_admin_user_card(cb, target_id)
+            await _show_admin_user_card(cb, target_id, user=u)
             await cb.answer()
             return
 
@@ -467,11 +471,13 @@ async def on_admin_callback(cb: CallbackQuery, state: FSMContext) -> None:
 
         if len(parts) == 3 and parts[0] == "adm" and parts[1] == "unv" and parts[2].lstrip("-").isdigit():
             target_id = int(parts[2])
-            revoke_vip(target_id)
-            if get_user(target_id) is None:
+            u = get_user(target_id)
+            if u is None:
                 await cb.answer("Пользователь не найден", show_alert=True)
                 return
-            await _show_admin_user_card(cb, target_id)
+            revoke_vip(target_id)
+            u = get_user(target_id)
+            await _show_admin_user_card(cb, target_id, user=u)
             await cb.answer("VIP снят")
             return
 
@@ -500,10 +506,7 @@ async def on_admin_callback(cb: CallbackQuery, state: FSMContext) -> None:
         await cb.answer("Неизвестное действие", show_alert=True)
     except Exception:
         log_exception(log, "admin error data=%s", data)
-        try:
-            await cb.answer("Ошибка", show_alert=True)
-        except Exception:
-            pass
+        await safe_cb_answer(cb, "Не удалось выполнить", show_alert=True)
 
 
 @admin_router.message(AdminPromoState.waiting_random, F.text, ~F.text.startswith("/"))
@@ -698,7 +701,8 @@ async def on_admin_vip_grant_days(msg: Message, state: FSMContext) -> None:
         await msg.answer("Сессия сброшена. Откройте карточку пользователя снова.")
         return
     target_id = int(target_id)
-    if get_user(target_id) is None:
+    u = get_user(target_id)
+    if u is None:
         await state.clear()
         await msg.answer("Пользователь не найден.")
         return
