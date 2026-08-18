@@ -12,7 +12,10 @@ class GoodsUiImportTests(unittest.TestCase):
         text = _goods_mobile_brands_text()
         kb = _goods_mobile_brands_keyboard({"role": "regular", "keywords": []})
         self.assertIn("бренд", text.lower())
+        self.assertNotIn("смартфоны", text.lower())
         self.assertTrue(kb.inline_keyboard)
+        last_row = kb.inline_keyboard[-1]
+        self.assertEqual(last_row[0].callback_data, "nav:home")
 
 
 if __name__ == "__main__":

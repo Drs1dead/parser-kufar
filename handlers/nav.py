@@ -26,8 +26,7 @@ from bot_ui import (
     back_keyboard,
     back_row,
     custom_price_prompt_text,
-    goods_category_keyboard,
-    goods_category_text,
+    help_keyboard,
     home_keyboard,
     home_text,
     memory_keyboard,
@@ -37,6 +36,10 @@ from bot_ui import (
     promo_prompt_text,
     vip_keyboard,
     vip_text,
+)
+from handlers.goods_ui import (
+    _goods_mobile_brands_keyboard,
+    _goods_mobile_brands_text,
 )
 from handlers.admin import admin_home_text, admin_main_keyboard
 from handlers.helpers import (
@@ -207,8 +210,8 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
         if data == "nav:goods":
             await flush_screen(
                 cb,
-                goods_category_text(),
-                reply_markup=goods_category_keyboard(),
+                _goods_mobile_brands_text(),
+                reply_markup=_goods_mobile_brands_keyboard(user),
             )
             return
 
@@ -275,7 +278,7 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
             await flush_screen(
                 cb,
                 HELP_TEXT,
-                reply_markup=back_keyboard(),
+                reply_markup=help_keyboard(),
             )
             return
 

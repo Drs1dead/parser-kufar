@@ -15,7 +15,7 @@ from goods_tree import (
     SAMSUNG_SERIES_LABELS,
 )
 from db import update_keywords
-from bot_ui import goods_category_keyboard, goods_category_text, home_keyboard, home_text
+from bot_ui import home_keyboard, home_text
 from handlers.goods_ui import (
     _apple_models,
     _goods_apple_lines_keyboard,
@@ -83,7 +83,7 @@ async def _on_line_toggle_callback(
     prefix: str,
     line_labels: dict[str, str],
     lines_map: dict[str, tuple[str, ...]],
-    pick_text: Callable[[str], str],
+    pick_text: Callable[[str, dict], str],
     line_keyboard: Callable[[dict, str, int], InlineKeyboardMarkup | None],
     log_tag: str,
 ) -> None:
@@ -107,7 +107,7 @@ async def _on_line_toggle_callback(
         return
 
     models = lines_map.get(line_slug, ())
-    screen_text = pick_text(line_slug)
+    screen_text = pick_text(line_slug, user)
 
     try:
         if action == "x":
@@ -178,7 +178,7 @@ async def on_bulk_select_callback(cb: CallbackQuery) -> None:
         elif len(parts) == 3 and parts[1] == "ap" and parts[2] in LINE_LABELS:
             line_slug = parts[2]
             models = APPLE_LINES.get(line_slug, ())
-            text = _goods_line_pick_text(line_slug)
+            text = _goods_line_pick_text(line_slug, user)
         elif len(parts) == 3 and parts[1] == "ss" and parts[2] in SAMSUNG_SERIES_LABELS:
             series_slug = parts[2]
             models = _samsung_series_models(series_slug)
@@ -191,7 +191,7 @@ async def on_bulk_select_callback(cb: CallbackQuery) -> None:
         elif len(parts) == 3 and parts[1] == "sg" and parts[2] in SAMSUNG_LINE_LABELS:
             line_slug = parts[2]
             models = SAMSUNG_LINES.get(line_slug, ())
-            text = _samsung_line_pick_text(line_slug)
+            text = _samsung_line_pick_text(line_slug, user)
         else:
             await cb.answer("Неизвестное действие", show_alert=True)
             return
@@ -243,15 +243,7 @@ async def on_goods_callback(cb: CallbackQuery) -> None:
         return
 
     try:
-        if data == "goods:h":
-            await flush_screen(
-                cb,
-                goods_category_text(),
-                reply_markup=goods_category_keyboard(),
-            )
-            return
-
-        if data == "goods:m":
+        if data in ("goods:h", "goods:m"):
             await flush_screen(
                 cb,
                 _goods_mobile_brands_text(),

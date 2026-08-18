@@ -48,12 +48,12 @@ handlers/
 2. Чтение/запись настроек — только через `db.py`.
 3. Экран «Товары» — логика клавиатур в `goods_ui.py`, обработка нажатий в `goods.py`.
 
-### Ветка «Товары и модели»
+### Ветка «Товары»
 
 | Кнопка | callback | Файл |
 |--------|----------|------|
-| Товары и модели | `nav:goods` | `nav.py` → `goods_category_*` из `bot_ui.py` |
-| Смартфоны | `goods:m` | `goods.py` → `_goods_mobile_brands_*` из `goods_ui.py` |
+| Товары | `nav:goods` | `nav.py` → `_goods_mobile_brands_*` из `goods_ui.py` |
+| Бренды (повторно) | `goods:h` / `goods:m` | `goods.py` → тот же экран Apple / Samsung |
 | Apple / Samsung | `goods:a` / `goods:s` | `goods.py` |
 | Модель в линейке | `gt:` / `st:` / `kw:` | `goods.py` |
 

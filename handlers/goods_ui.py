@@ -65,8 +65,8 @@ def _samsung_series_for_line(line_slug: str) -> str:
 def _samsung_line_back_button(line_slug: str) -> InlineKeyboardButton:
     series_slug = _samsung_series_for_line(line_slug)
     if series_slug in (SAMSUNG_SERIES_FLIP, SAMSUNG_SERIES_FOLD):
-        return InlineKeyboardButton(text="⬅️ К сериям", callback_data="goods:s")
-    return InlineKeyboardButton(text="⬅️ К линейкам", callback_data=f"sg:{series_slug}")
+        return InlineKeyboardButton(text="⬅️ Назад", callback_data="goods:s")
+    return InlineKeyboardButton(text="⬅️ Назад", callback_data=f"sg:{series_slug}")
 
 
 def _select_models(user: dict, models: list[str] | tuple[str, ...]) -> list[str]:
@@ -92,8 +92,8 @@ def _toggle_models(user: dict, models: list[str] | tuple[str, ...]) -> tuple[lis
 
 def _goods_mobile_brands_text() -> str:
     return (
-        f"{GOODS_CRUMB} › <b>Смартфоны</b>\n\n"
-        "🏷️ Выберите <b>бренд</b> — дальше линейки и модели."
+        f"{GOODS_CRUMB}\n\n"
+        "Выберите бренд, затем линейку и модели."
     )
 
 
@@ -106,21 +106,21 @@ def _goods_mobile_brands_keyboard(user: dict | None = None) -> InlineKeyboardMar
     ]
     if is_vip_user(user):
         rows.append([InlineKeyboardButton(text="📋 Все бренды", callback_data="bulk:all")])
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="goods:h")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _goods_samsung_text() -> str:
     return (
         f"{GOODS_CRUMB} › <b>Samsung</b>\n\n"
-        "📱 Серия → линейка → отметьте нужные модели."
+        "Выберите серию, затем отметьте модели."
     )
 
 
 def _goods_apple_lines_text() -> str:
     return (
         f"{GOODS_CRUMB} › <b>Apple</b>\n\n"
-        "🍎 Линейка iPhone → отметьте модели галочкой."
+        "Выберите линейку, затем отметьте модели."
     )
 
 
@@ -136,7 +136,7 @@ def _goods_apple_lines_keyboard(user: dict | None = None) -> InlineKeyboardMarku
     ]
     if is_vip_user(user):
         rows.append([InlineKeyboardButton(text="📋 Все iPhone", callback_data="bulk:apple")])
-    rows.append([InlineKeyboardButton(text="⬅️ К брендам", callback_data="goods:m")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="goods:m")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -150,7 +150,7 @@ def _goods_samsung_keyboard(user: dict | None = None) -> InlineKeyboardMarkup:
     ]
     if is_vip_user(user):
         rows.append([InlineKeyboardButton(text="📋 Весь Samsung", callback_data="bulk:samsung")])
-    rows.append([InlineKeyboardButton(text="⬅️ К брендам", callback_data="goods:m")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="goods:m")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -158,7 +158,7 @@ def _samsung_series_text(series_slug: str) -> str:
     title = SAMSUNG_SERIES_LABELS.get(series_slug, "Samsung")
     return (
         f"{GOODS_CRUMB} › <b>Samsung</b> › <b>{title}</b>\n\n"
-        "👇 Выберите <b>линейку</b>"
+        "Выберите линейку."
     )
 
 
@@ -184,28 +184,31 @@ def _samsung_series_keyboard(series_slug: str, user: dict | None = None) -> Inli
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _line_pick_text(line_slug: str, *, brand: str) -> str:
+def _line_pick_text(line_slug: str, *, brand: str, user: dict | None = None) -> str:
     if brand == "apple":
         title = LINE_LABELS.get(line_slug, line_slug)
         brand_title = "Apple"
     else:
         title = SAMSUNG_LINE_LABELS.get(line_slug, line_slug)
         brand_title = "Samsung"
-    limit = _max_keyword_slots({"role": "regular"})
-    return (
-        f"{GOODS_CRUMB} › <b>Мобильные</b> › <b>{brand_title}</b> › <b>{title}</b>\n\n"
-        "Нажмите на модель — <b>вкл/выкл</b>.\n"
-        f"Лимит для обычного аккаунта: до {limit} позиций.\n"
-        "Кнопка <b>Готово</b> — в главное меню."
-    )
+    lines = [
+        f"{GOODS_CRUMB} › <b>{brand_title}</b> › <b>{title}</b>",
+        "",
+        "Нажмите модель, чтобы включить или выключить.",
+    ]
+    if not is_vip_user(user):
+        limit = _max_keyword_slots({"role": "regular"})
+        lines.append(f"Обычный аккаунт: до {limit} моделей.")
+    lines.append("Готово — в главное меню.")
+    return "\n".join(lines)
 
 
-def _samsung_line_pick_text(line_slug: str) -> str:
-    return _line_pick_text(line_slug, brand="samsung")
+def _samsung_line_pick_text(line_slug: str, user: dict | None = None) -> str:
+    return _line_pick_text(line_slug, brand="samsung", user=user)
 
 
-def _goods_line_pick_text(line_slug: str) -> str:
-    return _line_pick_text(line_slug, brand="apple")
+def _goods_line_pick_text(line_slug: str, user: dict | None = None) -> str:
+    return _line_pick_text(line_slug, brand="apple", user=user)
 
 
 def _paginated_models_keyboard(
@@ -285,7 +288,7 @@ def _samsung_line_keyboard(user: dict, line_slug: str, page: int) -> InlineKeybo
         toggle_prefix="st",
         bulk_callback=bulk,
         footer_buttons=[
-            InlineKeyboardButton(text="Готово ✅", callback_data="kw:done"),
+            InlineKeyboardButton(text="Готово", callback_data="kw:done"),
             _samsung_line_back_button(line_slug),
         ],
     )
@@ -304,8 +307,8 @@ def _goods_line_keyboard(user: dict, line_slug: str, page: int) -> InlineKeyboar
         toggle_prefix="gt",
         bulk_callback=bulk,
         footer_buttons=[
-            InlineKeyboardButton(text="Готово ✅", callback_data="kw:done"),
-            InlineKeyboardButton(text="⬅️ К линейкам", callback_data="goods:a"),
+            InlineKeyboardButton(text="Готово", callback_data="kw:done"),
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="goods:a"),
         ],
     )
 

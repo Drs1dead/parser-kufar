@@ -8,8 +8,6 @@ from config import (
     DEFAULT_MEMORY_VOLUMES,
     MEMORY_VOLUME_OPTIONS,
     REFERRAL_VIP_DAYS_PER_FRIEND,
-    REGULAR_CHECK_INTERVAL,
-    VIP_CHECK_INTERVAL,
     VIP_PRICE_USD,
     format_local_datetime,
     format_memory_volume,
@@ -27,25 +25,23 @@ SUPPORT_URL = "https://t.me/kufiBY"
 SUPPORT_HANDLE = "@KufiBY"
 
 HELP_TEXT = (
-    "💡 <b>Как пользоваться ботом</b>\n\n"
-    "Бот ищет объявления на <b>Kufar.by</b> и присылает подходящие вам в Telegram. "
-    f"Все цены — в <b>белорусских рублях ({CURRENCY_SIGN})</b>.\n\n"
-    "<b>🚀 С чего начать</b>\n"
-    "1️⃣ <b>Товары</b> — отметьте модели телефонов\n"
-    "2️⃣ <b>Память</b> и <b>Цена</b> — уточните фильтр\n"
-    "3️⃣ <b>Включить уведомления</b> — в главном меню\n\n"
-    "<b>Настройки</b>\n"
+    "💡 <b>Как пользоваться</b>\n\n"
+    "Бот ищет телефоны на <b>Kufar.by</b> и присылает подходящие объявления. "
+    f"Цены — в белорусских рублях (<b>{CURRENCY_SIGN}</b>).\n\n"
+    "1. <b>Товары</b> — отметьте модели\n"
+    "2. <b>Память</b> и <b>Цена</b> — фильтр\n"
+    "3. <b>Включить уведомления</b> в главном меню\n\n"
+    "<b>Кнопки меню</b>\n"
     "📱 Товары — какие модели искать\n"
-    "💾 Память — 64–512 ГБ, «более» = от 512 ГБ\n"
-    f"💰 Цена — не дороже выбранной суммы ({CURRENCY_SIGN})\n\n"
-    "<b>Уведомления</b>\n"
-    "🔔 Включены — новые объявления в чат\n"
-    "🔕 Пауза — временно ничего не присылать\n\n"
-    "⭐ <b>VIP</b> — больше моделей, особые потоки, промокод, приглашение друзей\n\n"
-    "<b>Документы и поддержка</b>\n"
+    "💾 Память — объём накопителя\n"
+    f"💰 Цена — максимум в {CURRENCY_SIGN}\n"
+    "🔔 Уведомления — вкл или пауза\n"
+    "⭐ VIP — больше моделей и доп. потоки\n\n"
+    f"📰 <b>Новости</b>\n"
+    f"Канал <a href='{SUPPORT_URL}'>{SUPPORT_HANDLE}</a>. Вопросы — туда же.\n\n"
+    "<b>Документы</b>\n"
     f"🔒 <a href='{PRIVACY_POLICY_URL}'>Политика конфиденциальности</a>\n"
-    f"📄 <a href='{TERMS_OF_SERVICE_URL}'>Пользовательское соглашение</a>\n"
-    f"💬 Поддержка и новости — <a href='{SUPPORT_URL}'>{SUPPORT_HANDLE}</a>"
+    f"📄 <a href='{TERMS_OF_SERVICE_URL}'>Пользовательское соглашение</a>"
 )
 
 
@@ -63,18 +59,18 @@ def _memory_display(volumes: list[str] | None) -> str:
 
 def _vip_status_lines(user: dict | None) -> list[str]:
     if not user:
-        return ["👤 <b>Аккаунт:</b> —"]
+        return ["Аккаунт: —"]
     now = int(time.time())
     vip_until = int(user.get("vip_until") or 0)
     if user.get("role") == "vip" and vip_until > now:
         until = format_local_datetime(vip_until, fmt="%d.%m.%Y в %H:%M")
         return [
-            "👤 <b>Аккаунт:</b> VIP ⭐",
-            f"📅 <b>Активен до:</b> {until}",
+            "Аккаунт: <b>VIP</b>",
+            f"До: <b>{until}</b>",
         ]
     return [
-        "👤 <b>Аккаунт:</b> обычный",
-        "⭐ <b>VIP:</b> не подключён",
+        "Аккаунт: обычный",
+        "VIP не подключён",
     ]
 
 
@@ -91,90 +87,80 @@ def referral_link_for_user(user: dict | None) -> str:
 
 
 def back_row() -> list[InlineKeyboardButton]:
-    return [InlineKeyboardButton(text="🏠 Главное меню", callback_data="nav:home")]
+    return [InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:home")]
 
 
 def back_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[back_row()])
 
 
-def _new_user_intro() -> str:
-    return (
-        "<b>🚀 Быстрый старт</b>\n"
-        "1️⃣ <b>Товары</b> — выберите модели\n"
-        f"2️⃣ <b>Цена</b> — лимит в {CURRENCY_SIGN}\n"
-        "3️⃣ <b>Включить уведомления</b> 👇"
+def help_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📰 Новости", url=SUPPORT_URL)],
+            [
+                InlineKeyboardButton(text="🔒 Политика", url=PRIVACY_POLICY_URL),
+                InlineKeyboardButton(text="📄 Оферта", url=TERMS_OF_SERVICE_URL),
+            ],
+            back_row(),
+        ]
     )
 
 
 def home_text(user: dict | None, *, is_new: bool) -> str:
     if user is None:
         return (
-            "👋 <b>Добро пожаловать!</b>\n\n"
-            "Бот помогает находить телефоны на <b>Kufar.by</b>.\n"
-            f"Цены — в белорусских рублях (<b>{CURRENCY_SIGN}</b>).\n\n"
+            "<b>Kufar</b> · поиск телефонов\n\n"
+            f"Цены в белорусских рублях (<b>{CURRENCY_SIGN}</b>).\n\n"
             "Нажмите <code>/start</code>."
         )
 
     active = user.get("active")
-    sub = "🔔 включены" if active else "🔕 на паузе"
+    sub = "включены" if active else "на паузе"
     models_n = _kw_count(user)
     max_p = user.get("max_price") or 0
     model_word = _plural_models(models_n)
 
-    if is_new:
-        lines = [
-            "👋 <b>Рады видеть вас!</b>",
-            "",
-            "Мы присылаем подходящие объявления с Kufar прямо в этот чат.",
-            f"Все суммы — в <b>белорусских рублях ({CURRENCY_SIGN})</b>.",
-            "",
-            _new_user_intro(),
-            "",
-            "━━━━ <b>Ваши настройки</b> ━━━━",
-        ]
-    else:
-        lines = [
-            "👋 <b>С возвращением!</b>",
-            "",
-            "━━━━ <b>Сейчас</b> ━━━━",
-        ]
-
-    lines += [
-        f"📬 Уведомления · <b>{sub}</b>",
-        f"📱 Модели · <b>{models_n}</b> {model_word}",
-        f"💾 Память · <b>{_memory_display(user.get('memory_volumes'))}</b>",
-        f"💰 Цена · до <b>{format_price(max_p)}</b>",
+    lines = [
+        "<b>Kufar</b> · поиск телефонов",
+        "",
+        f"Цены в белорусских рублях (<b>{CURRENCY_SIGN}</b>).",
+        "",
     ]
-
-    if models_n == 0:
-        lines += ["", "💡 <i>Сначала выберите модели в «Товары» — иначе искать нечего.</i>"]
-
-    if not active:
-        interval_min = max(1, REGULAR_CHECK_INTERVAL // 60)
-        if user.get("role") == "vip":
-            interval_min = max(1, VIP_CHECK_INTERVAL // 60)
+    if is_new:
         lines += [
+            "<b>Как начать</b>",
+            "1. Товары — выберите модели",
+            "2. Цена и Память — фильтр",
+            "3. Включить уведомления",
             "",
-            "💤 <i>Новые объявления пока не приходят.</i>",
-            "Нажмите <b>«Включить уведомления»</b> внизу 👇",
-            f"<i>После включения первые совпадения обычно в течение ~{interval_min} мин.</i>",
         ]
+    lines += [
+        f"Уведомления: <b>{sub}</b>",
+        f"Модели: <b>{models_n}</b> {model_word}",
+        f"Память: <b>{_memory_display(user.get('memory_volumes'))}</b>",
+        f"Цена: до <b>{format_price(max_p)}</b>",
+    ]
 
     mode = user.get("vip_feed_mode") or "normal"
     if user.get("role") == "vip":
         if mode == "below_market":
-            lines += ["", "🔥 Доп. поток · <b>ниже рынка</b>"]
+            lines += ["", "Поток: <b>ниже рынка</b>"]
         elif mode == "exchange":
-            lines += ["", "🔄 Доп. поток · <b>только обмен</b>"]
+            lines += ["", "Поток: <b>только обмен</b>"]
         elif mode == "ideal":
-            lines += ["", "✨ Доп. поток · <b>идеальные (бета)</b>"]
-        else:
-            lines += ["", "⭐ VIP активен — настройки во вкладке <b>VIP</b>"]
-    elif not is_new:
-        lines += ["", "⭐ Больше возможностей — во вкладке <b>VIP</b>"]
+            lines += ["", "Поток: <b>идеальные (бета)</b>"]
 
-    lines += ["", "👇 <b>Меню</b>"]
+    if models_n == 0:
+        lines += ["", "Сначала выберите модели в «Товары»."]
+
+    if not active:
+        lines += [
+            "",
+            "Уведомления выключены — объявления не приходят.",
+            "Нажмите «Включить уведомления».",
+        ]
+
     return "\n".join(lines)
 
 
@@ -200,15 +186,19 @@ def home_keyboard(*, is_admin: bool, user: dict | None = None) -> InlineKeyboard
         rows.append(
             [InlineKeyboardButton(text="🔔 Включить уведомления", callback_data="nav:resume")]
         )
-    rows.append([InlineKeyboardButton(text="📱 Товары и модели", callback_data="nav:goods")])
+    rows.append([InlineKeyboardButton(text="📱 Товары", callback_data="nav:goods")])
     rows.append(
         [
             InlineKeyboardButton(text="💰 Цена", callback_data="nav:price"),
             InlineKeyboardButton(text="💾 Память", callback_data="nav:memory"),
         ]
     )
-    rows.append([InlineKeyboardButton(text="⭐ VIP", callback_data="nav:vip")])
-    rows.append([InlineKeyboardButton(text="💡 Помощь", callback_data="nav:help")])
+    rows.append(
+        [
+            InlineKeyboardButton(text="⭐ VIP", callback_data="nav:vip"),
+            InlineKeyboardButton(text="💡 Помощь", callback_data="nav:help"),
+        ]
+    )
     if is_admin:
         rows.append([InlineKeyboardButton(text="🔐 Админ-панель", callback_data="nav:admin")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -220,26 +210,28 @@ def vip_text(user: dict | None) -> str:
     if user and user.get("role") == "vip":
         mode = user.get("vip_feed_mode") or "normal"
         if mode == "below_market":
-            lines.append("🔥 Поток · ниже рынка")
+            lines += ["", "Поток: <b>ниже рынка</b>"]
         elif mode == "exchange":
-            lines.append("🔄 Поток · только обмен")
+            lines += ["", "Поток: <b>только обмен</b>"]
         elif mode == "ideal":
-            lines.append("✨ Поток · идеальные (бета)")
-            lines.append(
-                "<i>Б/у на Kufar — ок; плохие состояния — нет. После описания: АКБ ≥ 75%, "
-                "без поломок и замен. Бета.</i>"
-            )
+            lines += [
+                "",
+                "Поток: <b>идеальные (бета)</b>",
+                "Б/у на Kufar — ок. Плохие состояния — нет. АКБ ≥ 75%, без поломок и замен.",
+            ]
         else:
-            lines.append("📬 Поток · обычная рассылка")
-        lines.append("")
-        lines.append("<i>Модели — в «Товары». Потоки — кнопками ниже.</i>")
+            lines += ["", "Поток: <b>обычная рассылка</b>"]
+        lines += ["", "Модели — в «Товары». Потоки — кнопками ниже."]
     else:
         lines += [
             "",
-            "📱 без лимита моделей · 🔍 жёсткие фильтры · 🔥 ниже рынка · 🔄 обмен · ✨ идеальные",
-            f"💳 <b>{VIP_PRICE_USD}$</b> / 30 дн. · @manohio",
+            "Что даёт VIP:",
+            "• без лимита моделей",
+            "• фильтры качества",
+            "• потоки: ниже рынка, обмен, идеальные",
             "",
-            "<i>Есть промокод — кнопка ниже.</i>",
+            f"Цена: <b>{VIP_PRICE_USD}$</b> / 30 дней · @manohio",
+            "Промокод — кнопка ниже.",
         ]
 
     if user and user.get("chat_id") is not None:
@@ -247,9 +239,9 @@ def vip_text(user: dict | None) -> str:
         ref_n = count_referrals(cid)
         link = referral_link_for_user(user)
         days = REFERRAL_VIP_DAYS_PER_FRIEND
-        lines += ["", f"🎁 +{days} дн. VIP за друга · приглашено: <b>{ref_n}</b>"]
+        lines += ["", f"За друга: +{days} дн. VIP · приглашено: <b>{ref_n}</b>"]
         if link:
-            lines.append(f"🔗 <code>{link}</code>")
+            lines.append(f"<code>{link}</code>")
 
     return "\n".join(lines)
 
@@ -277,9 +269,6 @@ def vip_keyboard(user: dict | None) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📄 Оферта", url=TERMS_OF_SERVICE_URL),
         ]
     )
-    rows.append(
-        [InlineKeyboardButton(text=f"💬 Поддержка {SUPPORT_HANDLE}", url=SUPPORT_URL)]
-    )
     rows.append(back_row())
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -288,15 +277,15 @@ def memory_screen_text(user: dict | None) -> str:
     vols = (user or {}).get("memory_volumes") or list(DEFAULT_MEMORY_VOLUMES)
     selected = _memory_display(vols)
     if user and user.get("role") == "vip":
-        limit = "⭐ VIP · можно выбрать <b>несколько</b> объёмов"
+        limit = "VIP: можно выбрать несколько объёмов."
     else:
-        limit = "👤 Обычный аккаунт · <b>один</b> объём (новый заменяет прежний)"
+        limit = "Обычный аккаунт: один объём (новый заменяет прежний)."
     return (
-        "💾 <b>Память устройства</b>\n\n"
-        f"✅ Сейчас · <b>{selected}</b>\n\n"
-        f"{limit}\n\n"
-        "💡 <i>Нет памяти в объявлении — подойдёт при любом выборе.</i>\n\n"
-        "👇 Нажмите объём"
+        "💾 <b>Память</b>\n\n"
+        f"Сейчас: <b>{selected}</b>\n\n"
+        "Пришлём объявления с этим объёмом. "
+        "Если память в объявлении не указана — подойдёт любое.\n\n"
+        f"{limit}"
     )
 
 
@@ -325,51 +314,36 @@ def memory_keyboard(user: dict | None) -> InlineKeyboardMarkup:
 def price_screen_text(user: dict | None) -> str:
     cur = user.get("max_price") if user else None
     cur_txt = f"<b>{format_price(cur)}</b>" if cur is not None else "не задана"
+    extra = ""
+    if user and user.get("role") == "vip":
+        extra = "\n\nСвоя сумма — кнопка ниже."
     return (
-        f"💰 <b>Лимит по цене</b> <i>({CURRENCY_SIGN})</i>\n\n"
-        f"✅ Сейчас · {cur_txt}\n\n"
-        f"Пришлём только объявления <b>не дороже</b> этой суммы в белорусских рублях.\n\n"
-        "👇 Выберите готовую сумму"
-        + ("\n🎯 Или свою цену — кнопка ниже (VIP)" if user and user.get("role") == "vip" else "")
-    )
-
-
-def goods_category_text() -> str:
-    return (
-        f"{GOODS_CRUMB}\n\n"
-        "Отметьте модели — бот будет искать только их на Kufar.\n\n"
-        "📱 Сейчас · <b>смартфоны</b> Apple и Samsung."
-    )
-
-
-def goods_category_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📱 Смартфоны", callback_data="goods:m")],
-            back_row(),
-        ]
+        f"💰 <b>Цена</b>\n\n"
+        f"Сейчас: {cur_txt}\n\n"
+        f"Пришлём только объявления не дороже этой суммы в {CURRENCY_SIGN}."
+        f"{extra}"
     )
 
 
 def promo_prompt_text() -> str:
     return (
         "🎟 <b>Промокод</b>\n\n"
-        "Отправьте код <b>одним сообщением</b>.\n"
-        "VIP активируется сразу после проверки."
+        "Отправьте код одним сообщением.\n"
+        "VIP включится сразу после проверки."
     )
 
 
 def promo_back_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="⬅️ К VIP", callback_data="nav:vip")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:vip")],
         ]
     )
 
 
 def custom_price_prompt_text() -> str:
     return (
-        "🎯 <b>Своя цена</b> <i>(VIP)</i>\n\n"
-        f"Введите максимум в <b>белорусских рублях ({CURRENCY_SIGN})</b> — одним числом.\n"
+        "🎯 <b>Своя цена</b> (VIP)\n\n"
+        f"Введите максимум в {CURRENCY_SIGN} — одним числом.\n"
         "Например: <code>1200</code>"
     )
