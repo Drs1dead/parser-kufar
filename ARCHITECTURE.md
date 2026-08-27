@@ -42,11 +42,11 @@ handlers/
 ## Поток рассылки
 
 1. `poller` разделяет due-списки: **Kufar** (`user_is_kufar_pollable`) и **Avito** (`user_is_avito_pollable`, только при `AVITO_ENABLED=true`). Для каждого источника — отдельный `_dispatch_due` с `source=kufar|avito`, без смешивания HTTP-батчей.
-2. При `KUFAR_USE_CATALOG` группирует Kufar-пользователей по ключу `source + категория + rgn + ar + модели + память` (память только у смартфонов) и качает маркетплейс **один раз на ключ** через `get_adapter(source).fetch_for_key` (TTL-кэш ~18 с для Kufar, `AVITO_FETCH_CACHE_TTL_SECONDS` для Avito). Текстовый `query` не используем: на Kufar это полнотекст, а не фильтр модели.
+2. При `KUFAR_USE_CATALOG` группирует Kufar-пользователей по ключу `source + категория + rgn + ar + модели + память` (память только у смартфонов) и качает маркетплейс **один раз на ключ** через `get_adapter(source).fetch_for_key` (общий TTL `FEED_REFRESH_SECONDS`). Текстовый `query` не используем: на Kufar это полнотекст, а не фильтр модели.
 3. Для каждого due — `match_ads_for_user` по батчу его ключа. При catalog: без `smart_filtering` (кроме VIP «идеальные»), магазины (`company_ad`) и тонкий антихлам в заголовке; модель (и память у смартфонов) ещё раз проверяются локально.
 4. Новые объявления отправляются в Telegram (`formatter.format_ad`).
 
-Фасеты: [`kufar_catalog.py`](kufar_catalog.py). Нормализация и fetch Kufar — [`marketplace/kufar.py`](marketplace/kufar.py). Avito — [`marketplace/avito.py`](marketplace/avito.py) (stub: `fetch=[]` при `AVITO_ENABLED=false`). Старый текстовый fetch (`KUFAR_QUERIES`) — если `KUFAR_USE_CATALOG=false`.
+Фасеты: [`kufar_catalog.py`](kufar_catalog.py). Нормализация и fetch Kufar — [`marketplace/kufar.py`](marketplace/kufar.py). Avito — [`marketplace/avito.py`](marketplace/avito.py) + [`avito_fetch.py`](avito_fetch.py): mock (`AVITO_DEV_MOCK`), JSON feed (`AVITO_FEED_URL`) или `fetch=[]` при `AVITO_ENABLED=false`. Старый текстовый fetch (`KUFAR_QUERIES`) — если `KUFAR_USE_CATALOG=false`.
 
 ### Фаза 4 — Avito (отдельный трек)
 
@@ -57,7 +57,8 @@ flowchart LR
   KufarDispatch --> KufarAdapter
   AvitoDispatch --> AvitoAdapter
   AvitoAdapter -->|"AVITO_ENABLED=false"| Empty[fetch empty]
-  AvitoAdapter -->|"enabled + feed"| Feed[Partner feed]
+  AvitoAdapter -->|"DEV_MOCK"| MockFile[avito_mock_ads.json]
+  AvitoAdapter -->|"FEED_URL"| Feed[JSON feed snapshot]
 ```
 
 | Компонент | Kufar (BY) | Avito (RU) |
@@ -77,7 +78,7 @@ flowchart LR
 | `users.country` | `by` / `ru` | Страна в UI |
 | `users.primary_source` | `kufar` / `avito` | Адаптер для fetch и `source` в seen/prices |
 
-Сейчас активен poll для `by` + `kufar`. Avito poll включается только при `AVITO_ENABLED=true` и заполненном `avito_city_id`. `seen_ads` и `market_prices` фильтруются по `source`.
+Сейчас активен poll для `by` + `kufar`. Avito poll: `AVITO_ENABLED=true`, город `avito_city_id`, источник данных — `AVITO_FEED_URL` (прод) или `AVITO_DEV_MOCK` (тест). `seen_ads` и `market_prices` фильтруются по `source`.
 
 ### VIP-потоки (`users.vip_feed_mode`)
 

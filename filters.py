@@ -464,6 +464,7 @@ def filter_reject_reason(
     skip_new_phone: bool = False,
     company_filter: bool = False,
     thin_junk: bool = False,
+    extra_headline_stems: tuple[str, ...] = (),
 ) -> str | None:
     """
     None — объявление проходит фильтры.
@@ -484,7 +485,12 @@ def filter_reject_reason(
     if company_filter and ad.get("company_ad"):
         return REJECT_COMPANY_AD
     if thin_junk:
-        if any(_contains_stem(headline, stem) for stem in ACCESSORY_HEADLINE_STEMS):
+        stems: tuple[str, ...] = ACCESSORY_HEADLINE_STEMS
+        if extra_headline_stems:
+            stems = tuple(
+                dict.fromkeys((*ACCESSORY_HEADLINE_STEMS, *extra_headline_stems))
+            )
+        if any(_contains_stem(headline, stem) for stem in stems):
             return REJECT_THIN_JUNK
 
     if basic_filtering or smart_filtering:
@@ -536,6 +542,7 @@ def matches_filters(
     skip_new_phone: bool = False,
     company_filter: bool = False,
     thin_junk: bool = False,
+    extra_headline_stems: tuple[str, ...] = (),
 ) -> bool:
     """
     Цена — по объявлению целиком.
@@ -556,6 +563,7 @@ def matches_filters(
             skip_new_phone=skip_new_phone,
             company_filter=company_filter,
             thin_junk=thin_junk,
+            extra_headline_stems=extra_headline_stems,
         )
         is None
     )

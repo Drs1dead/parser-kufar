@@ -1,0 +1,30 @@
+[
+  {
+    "id": "feed-iphone15-msk",
+    "title": "Apple iPhone 15 256 GB",
+    "price_rub": 75500,
+    "url": "https://www.avito.ru/moskva/telefony/feed_iphone_15_mock",
+    "city": "Москва",
+    "region": "Москва",
+    "region_id": "637640",
+    "city_id": "637640",
+    "category": "phones",
+    "description": "Отличное состояние. АКБ 91%.",
+    "photos": [],
+    "published_at": "2026-02-01T10:00:00Z"
+  },
+  {
+    "id": "feed-galaxy-spb",
+    "title": "Samsung Galaxy S24 256 GB",
+    "price_rub": 69000,
+    "url": "https://www.avito.ru/sankt-peterburg/telefony/feed_galaxy_mock",
+    "city": "Санкт-Петербург",
+    "region": "Санкт-Петербург",
+    "region_id": "653240",
+    "city_id": "653240",
+    "category": "phones",
+    "description": "Полный комплект.",
+    "photos": [],
+    "published_at": "2026-02-01T09:00:00Z"
+  }
+]

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import aiohttp
 
-from config import FETCH_CACHE_TTL_SECONDS, REGULAR_CHECK_INTERVAL, VIP_CHECK_INTERVAL
+from config import FEED_REFRESH_SECONDS, REGULAR_CHECK_INTERVAL, VIP_CHECK_INTERVAL
 from kufar_fetch import DEFAULT_HEADERS, enrich_ads_descriptions, _description_cache
 from marketplace.keys import FetchKey
 from poller import _fetch_catalog_groups, _fetch_cache, _poll_sleep_seconds, _seconds_until_due, _should_process_user
@@ -83,7 +83,7 @@ class PollerFetchCacheTests(unittest.IsolatedAsyncioTestCase):
 
         cached = _fetch_cache.get(key)
         self.assertIsNotNone(cached)
-        self.assertGreaterEqual(FETCH_CACHE_TTL_SECONDS, VIP_CHECK_INTERVAL)
+        self.assertGreaterEqual(FEED_REFRESH_SECONDS, VIP_CHECK_INTERVAL)
 
 
 class DescriptionCacheTests(unittest.IsolatedAsyncioTestCase):

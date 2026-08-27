@@ -18,10 +18,10 @@ from aiogram.types import InputMediaPhoto
 
 from config import (
     AVITO_CHECK_INTERVAL,
-    AVITO_FETCH_CACHE_TTL_SECONDS,
+    FEED_REFRESH_SECONDS,
     AVITO_VIP_CHECK_INTERVAL,
     CHECK_INTERVAL,
-    FETCH_CACHE_TTL_SECONDS,
+    FEED_REFRESH_SECONDS,
     FIRST_RUN_LIMIT,
     KUFAR_USE_CATALOG,
     MARKET_DISCOUNT_THRESHOLD,
@@ -458,13 +458,8 @@ async def _fetch_catalog_groups(
     ads_by_key: dict[FetchKey, list[dict]] = {}
     keys_to_fetch: list[FetchKey] = []
     for key in keys:
-        ttl = (
-            AVITO_FETCH_CACHE_TTL_SECONDS
-            if key[0] == SOURCE_AVITO
-            else FETCH_CACHE_TTL_SECONDS
-        )
         cached = _fetch_cache.get(key)
-        if cached and now - cached[0] < ttl:
+        if cached and now - cached[0] < FEED_REFRESH_SECONDS:
             ads_by_key[key] = cached[1]
         else:
             keys_to_fetch.append(key)

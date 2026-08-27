@@ -1,12 +1,12 @@
-"""Адаптер Avito — mock или feed (Фаза 4)."""
+"""Адаптер Avito — mock, JSON feed или stub (Фаза 4)."""
 from __future__ import annotations
 
 import logging
 
 import aiohttp
 
-from avito_fetch import fetch_mock_ads_for_key
-from config import AVITO_DEV_MOCK, AVITO_ENABLED
+from avito_fetch import AVITO_HTTP_HEADERS, fetch_feed_ads_for_key, fetch_mock_ads_for_key
+from config import AVITO_DEV_MOCK, AVITO_ENABLED, AVITO_FEED_FILE, AVITO_FEED_URL
 from marketplace.keys import FetchKey
 from marketplace.types import CURRENCY_RUB, NormalizedAd, SOURCE_AVITO
 
@@ -41,6 +41,10 @@ class AvitoAdapter:
             "source": SOURCE_AVITO,
             "currency": CURRENCY_RUB,
         }
+        if raw.get("region_id"):
+            ad["region_id"] = str(raw.get("region_id"))
+        if raw.get("city_id"):
+            ad["city_id"] = str(raw.get("city_id"))
         return NormalizedAd(ad)
 
     async def fetch_for_key(
@@ -49,12 +53,23 @@ class AvitoAdapter:
         *,
         session: aiohttp.ClientSession | None = None,
     ) -> list[NormalizedAd]:
-        del session
         if not AVITO_ENABLED:
             log.debug("avito fetch skipped — AVITO_ENABLED=false key=%s", key[:4])
             return []
         if AVITO_DEV_MOCK:
             return [NormalizedAd(ad) for ad in fetch_mock_ads_for_key(key)]
+        if AVITO_FEED_URL or AVITO_FEED_FILE:
+            async def _run(sess: aiohttp.ClientSession) -> list[NormalizedAd]:
+                ads = await fetch_feed_ads_for_key(key, sess)
+                return [NormalizedAd(ad) for ad in ads]
+
+            if session is not None:
+                return await _run(session)
+            connector = aiohttp.TCPConnector(limit=4)
+            async with aiohttp.ClientSession(
+                headers=AVITO_HTTP_HEADERS, connector=connector
+            ) as own:
+                return await _run(own)
         raise NotImplementedError(
             "Avito feed adapter is not configured — set AVITO_FEED_URL when channel is ready"
         )

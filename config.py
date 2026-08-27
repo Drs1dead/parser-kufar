@@ -246,11 +246,15 @@ KUFAR_CATALOG_COMPARE = os.getenv("KUFAR_CATALOG_COMPARE", "").strip().lower() i
     "yes",
 )
 
-# Кэш HTTP-ответа Kufar по fetch-ключу (сек). Должен быть >= VIP_CHECK_INTERVAL.
-FETCH_CACHE_TTL_SECONDS = max(
-    1,
-    int(os.getenv("FETCH_CACHE_TTL_SECONDS", str(VIP_CHECK_INTERVAL))),
-)
+# Общий TTL кэша fetch: Kufar по FetchKey, снимок Avito JSON feed. >= VIP interval.
+_feed_refresh_env = os.getenv("FEED_REFRESH_SECONDS")
+if _feed_refresh_env:
+    FEED_REFRESH_SECONDS = max(1, int(_feed_refresh_env))
+else:
+    _legacy_fetch_ttl = os.getenv("FETCH_CACHE_TTL_SECONDS")
+    FEED_REFRESH_SECONDS = max(
+        1, int(_legacy_fetch_ttl or str(VIP_CHECK_INTERVAL))
+    )
 MAX_AD_PHOTOS = max(1, int(os.getenv("MAX_AD_PHOTOS", "3")))
 AD_DESCRIPTION_MAX_CHARS = max(50, int(os.getenv("AD_DESCRIPTION_MAX_CHARS", "350")))
 AD_DESCRIPTION_MAX_CHARS_REGULAR = max(
@@ -268,13 +272,20 @@ _avito_enabled = os.getenv("AVITO_ENABLED", "false").strip().lower()
 AVITO_ENABLED = _avito_enabled in ("1", "true", "yes", "on")
 AVITO_CHECK_INTERVAL = max(1, int(os.getenv("AVITO_CHECK_INTERVAL", "420")))
 AVITO_VIP_CHECK_INTERVAL = max(1, int(os.getenv("AVITO_VIP_CHECK_INTERVAL", "60")))
-AVITO_FETCH_CACHE_TTL_SECONDS = max(
-    1, int(os.getenv("AVITO_FETCH_CACHE_TTL_SECONDS", "30"))
-)
 _avito_dev_mock = os.getenv("AVITO_DEV_MOCK", "false").strip().lower()
 AVITO_DEV_MOCK = _avito_dev_mock in ("1", "true", "yes", "on")
 if AVITO_DEV_MOCK and not AVITO_ENABLED:
     AVITO_DEV_MOCK = False
+
+# Фаза 4.1: JSON feed партнёра (не парсинг avito.ru).
+AVITO_FEED_URL = os.getenv("AVITO_FEED_URL", "").strip()
+AVITO_FEED_AUTH = os.getenv("AVITO_FEED_AUTH", "").strip()
+AVITO_FEED_FILE = os.getenv("AVITO_FEED_FILE", "").strip()
+AVITO_FEED_TIMEOUT_SECONDS = max(
+    5, int(os.getenv("AVITO_FEED_TIMEOUT_SECONDS", "25"))
+)
+AVITO_FEED_RETRIES = max(1, int(os.getenv("AVITO_FEED_RETRIES", "3")))
+AVITO_FEED_RETRY_DELAY = float(os.getenv("AVITO_FEED_RETRY_DELAY", "2"))
 
 # Не целый телефон: проверка по title + summary (стемы ловят стекла/стёкла).
 ACCESSORY_HEADLINE_STEMS: tuple[str, ...] = (

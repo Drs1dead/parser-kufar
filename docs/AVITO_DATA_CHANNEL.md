@@ -49,10 +49,35 @@ Phase 4.0 ships stubs only. Production fetch for Russia requires a **legal data 
 AVITO_ENABLED=false
 AVITO_CHECK_INTERVAL=420
 AVITO_VIP_CHECK_INTERVAL=60
-AVITO_FETCH_CACHE_TTL_SECONDS=30
 ```
 
-Set `AVITO_ENABLED=true` only after the checklist above.
+Set `AVITO_ENABLED=true` only after the checklist below.
+
+## Как получить данные (API / фид)
+
+**Публичного API Avito «слушать витрину» нет.** Официальный API Avito — для **своих** объявлений продавца (управление листингами), не для мониторинга каталога чужих телефонов.
+
+Варианты для бота:
+
+| Вариант | Что нужно |
+|---------|-----------|
+| Партнёрский JSON feed | URL + токен от агрегатора/партнёра; поля как в «Minimum fields» |
+| Свой экспорт | Скрипт/сервис, который легально собирает данные и выдаёт JSON на `AVITO_FEED_URL` |
+| Локальный тест | `AVITO_DEV_MOCK=true` — без HTTP, файл `geo/avito_mock_ads.json` |
+
+Настройка prod feed:
+
+```env
+AVITO_ENABLED=true
+AVITO_DEV_MOCK=false
+AVITO_FEED_URL=https://your-partner.example/avito-feed.json
+AVITO_FEED_AUTH=Bearer <token>   # если партнёр требует Authorization
+FEED_REFRESH_SECONDS=30            # общий TTL кэша Kufar + Avito feed
+```
+
+Формат ответа feed — массив `[{...}]` или объект `{"ads": [...]}`. Пример записи: [`geo/avito_feed_sample.json`](geo/avito_feed_sample.json).
+
+Если партнёра ещё нет — оставьте `AVITO_ENABLED=true` + `AVITO_DEV_MOCK=true` для smoke-теста UI и poller.
 
 ## Local dev mock (end-to-end без фида)
 
@@ -73,4 +98,34 @@ AVITO_DEV_MOCK=true
 4. Включить уведомления
 
 При старте бота в логах: `AVITO_DEV_MOCK=true — … mock_ads.json`.
+
+## JSON feed format (Фаза 4.1)
+
+Поддерживаются два корневых формата:
+
+```json
+[{ "id": "...", "title": "...", "price_rub": 75000, "url": "...", ... }]
+```
+
+```json
+{ "ads": [ { "id": "...", ... } ] }
+```
+
+Поля записи — как в секции «Minimum fields» выше. Фильтрация по `FetchKey` на стороне бота (город, категория, модель в title, память).
+
+Пример: [`geo/avito_feed_sample.json`](geo/avito_feed_sample.json).
+
+### Prod checklist
+
+```env
+AVITO_ENABLED=true
+AVITO_DEV_MOCK=false
+AVITO_FEED_URL=https://partner.example/avito-feed.json
+# AVITO_FEED_AUTH=Bearer <token>
+FEED_REFRESH_SECONDS=30
+```
+
+- Один HTTP GET на снимок Avito feed раз в `FEED_REFRESH_SECONDS` (тот же TTL, что кэш fetch Kufar по ключу)
+- Retry на 5xx/429/network (`AVITO_FEED_RETRIES`)
+- RU anti-junk: [`filters_avito.py`](filters_avito.py)
 
