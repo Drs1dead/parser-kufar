@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from config import (
+    BYN_TO_RUB,
     DB_PATH as DB_PATH_OVERRIDE,
     DEFAULT_KEYWORDS,
     DEFAULT_MAX_PRICE,
@@ -16,6 +17,7 @@ from config import (
     MEMORY_VOLUME_OPTIONS,
     PRICE_DATA_RETENTION_DAYS,
     REFERRAL_VIP_DAYS_PER_FRIEND,
+    RUB_TO_BYN,
     SEEN_ADS_RETENTION_DAYS,
     SQLITE_BUSY_TIMEOUT,
     SQLITE_SYNCHRONOUS,
@@ -24,6 +26,7 @@ from config import (
 from kufar_catalog import CITY_RGN, CITY_LABELS, DEFAULT_CITY, normalize_city, RGN_TO_SLUG
 from marketplace.types import (
     COUNTRY_BY,
+    COUNTRY_RU,
     COUNTRIES,
     SOURCE_AVITO,
     SOURCE_KUFAR,
@@ -627,7 +630,7 @@ def update_city(chat_id: int, city: str) -> str:
     return slug
 
 
-def update_country(chat_id: int, country: str) -> dict[str, str]:
+def update_country(chat_id: int, country: str) -> dict[str, str | int]:
     c = normalize_country(country)
     if c not in COUNTRIES:
         cur = _execute("SELECT country, primary_source FROM users WHERE chat_id = ?", (chat_id,))
@@ -638,12 +641,25 @@ def update_country(chat_id: int, country: str) -> dict[str, str]:
             "country": normalize_country(row[0]),
             "primary_source": normalize_primary_source(row[1]),
         }
+    user = get_user(chat_id)
+    old_country = normalize_country((user or {}).get("country"))
+    old_price = int((user or {}).get("max_price") or DEFAULT_MAX_PRICE)
     source = default_source_for_country(c)
     _execute(
         "UPDATE users SET country = ?, primary_source = ? WHERE chat_id = ?",
         (c, source, chat_id),
     )
-    return {"country": c, "primary_source": source}
+    out: dict[str, str | int] = {"country": c, "primary_source": source}
+    if user and old_country != c:
+        if c == COUNTRY_RU and old_country == COUNTRY_BY:
+            new_price = max(10000, round(old_price * BYN_TO_RUB))
+        elif c == COUNTRY_BY and old_country == COUNTRY_RU:
+            new_price = max(1, round(old_price * RUB_TO_BYN))
+        else:
+            new_price = old_price
+        if new_price != old_price:
+            out["max_price"] = update_max_price(chat_id, new_price)
+    return out
 
 
 def update_geo(

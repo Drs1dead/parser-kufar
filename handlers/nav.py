@@ -12,6 +12,7 @@ from config import (
     AVITO_ENABLED,
     DEFAULT_MEMORY_VOLUMES,
     format_price_for_country,
+    format_price_for_user,
     MAX_PRICE_PRESETS,
     MAX_PRICE_PRESETS_RUB,
     MEMORY_VOLUME_OPTIONS,
@@ -91,11 +92,12 @@ def _price_presets_for_user(user: dict | None) -> tuple[int, ...]:
 def price_presets_keyboard(user: dict | None) -> InlineKeyboardMarkup:
     cur = user.get("max_price") if user else None
     country = normalize_country((user or {}).get("country"))
+    source = (user or {}).get("primary_source")
     presets = _price_presets_for_user(user)
     row: list[InlineKeyboardButton] = []
     rows: list[list[InlineKeyboardButton]] = []
     for p in presets:
-        short = format_price_for_country(p, country)
+        short = format_price_for_country(p, country, primary_source=source)
         label = f"✅ {short}" if cur is not None and int(cur) == int(p) else short
         row.append(InlineKeyboardButton(text=label, callback_data=f"nav:set:{p}"))
         if len(row) >= 3:
@@ -255,6 +257,8 @@ async def on_country(cb: CallbackQuery, state: FSMContext) -> None:
         geo = update_country(chat_id, COUNTRY_BY)
         user["country"] = geo["country"]
         user["primary_source"] = geo["primary_source"]
+        if geo.get("max_price") is not None:
+            user["max_price"] = geo["max_price"]
         uid = cb.from_user.id if cb.from_user else 0
         await flush_screen(
             cb,
@@ -272,6 +276,8 @@ async def on_country(cb: CallbackQuery, state: FSMContext) -> None:
         geo = update_country(chat_id, COUNTRY_RU)
         user["country"] = geo["country"]
         user["primary_source"] = geo["primary_source"]
+        if geo.get("max_price") is not None:
+            user["max_price"] = geo["max_price"]
         uid = cb.from_user.id if cb.from_user else 0
         await flush_screen(
             cb,

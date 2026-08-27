@@ -78,6 +78,17 @@ class GeoDbTests(unittest.TestCase):
         self.assertEqual(geo["country"], COUNTRY_RU)
         self.assertEqual(geo["primary_source"], SOURCE_AVITO)
 
+    def test_update_country_ru_converts_max_price_from_by(self) -> None:
+        chat_id = 646464
+        db.add_user(chat_id)
+        db.update_max_price(chat_id, 5000)
+        geo = db.update_country(chat_id, COUNTRY_RU)
+        self.assertIn("max_price", geo)
+        self.assertGreater(int(geo["max_price"]), 10000)
+        user = db.get_user(chat_id)
+        assert user is not None
+        self.assertGreater(user["max_price"], 10000)
+
 
 if __name__ == "__main__":
     unittest.main()

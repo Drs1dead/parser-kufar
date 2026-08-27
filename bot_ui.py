@@ -13,6 +13,7 @@ from config import (
     format_local_datetime,
     format_memory_volume,
     format_price_for_country,
+    format_price_for_user,
 )
 from db import count_referrals, ensure_referral_code
 from kufar_catalog import QUICK_RGN_BUTTONS, user_city_label
@@ -159,7 +160,7 @@ def home_text(user: dict | None, *, is_new: bool) -> str:
         geo = user_avito_city_label(user)
     else:
         geo = user_city_label(user)
-    detail = f"до {format_price_for_country(max_p, country)} · {geo}"
+    detail = f"до {format_price_for_user(max_p, user)} · {geo}"
     if is_phones_category(user.get("product_category")):
         mem = (user.get("memory_volumes") or list(DEFAULT_MEMORY_VOLUMES))
         mem_txt = ", ".join(format_memory_volume(v, short=True) for v in mem)
@@ -507,9 +508,8 @@ def city_keyboard(user: dict | None) -> InlineKeyboardMarkup:
 
 def price_screen_text(user: dict | None) -> str:
     cur = user.get("max_price") if user else None
-    country = normalize_country((user or {}).get("country"))
     cur_txt = (
-        f"<b>{format_price_for_country(cur, country)}</b>"
+        f"<b>{format_price_for_user(cur, user)}</b>"
         if cur is not None
         else "не задана"
     )

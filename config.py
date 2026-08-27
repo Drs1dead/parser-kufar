@@ -121,15 +121,32 @@ MAX_PRICE_PRESETS_RUB: tuple[int, ...] = tuple(
 def format_price_for_country(
     amount: int | float | None,
     country: str | None = None,
+    *,
+    primary_source: str | None = None,
 ) -> str:
-    """Цена для UI: BY — Br, RU — ₽."""
+    """Цена для UI: BY — Br, RU / Avito — ₽."""
     if amount is None:
         return "не указана"
     n = int(amount)
     text = f"{n:,}".replace(",", " ")
+    if str(primary_source or "").strip().lower() == "avito":
+        return f"{text} ₽"
     if str(country or "").strip().lower() == "ru":
         return f"{text} ₽"
     return f"{text} {CURRENCY_SIGN}"
+
+
+def format_price_for_user(
+    amount: int | float | None,
+    user: dict | None,
+) -> str:
+    if not user:
+        return format_price(amount)
+    return format_price_for_country(
+        amount,
+        user.get("country"),
+        primary_source=user.get("primary_source"),
+    )
 
 # Стоп-слова по смыслу объявления: проверяются только в названии (subject),
 # чтобы «чехол в подарок» в описании не отсекало продажу телефона.
