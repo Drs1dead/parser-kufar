@@ -112,10 +112,48 @@ MAX_PRICE_PRESETS_RUB: tuple[int, ...] = tuple(
     int(x.strip())
     for x in os.getenv(
         "MAX_PRICE_PRESETS_RUB",
-        "30000,50000,70000,100000,150000,200000,300000,500000",
+        "5000,10000,15000,20000,25000,30000,40000,50000",
     ).split(",")
     if x.strip().isdigit()
-) or (30000, 50000, 70000, 100000, 150000, 200000, 300000, 500000)
+) or (5000, 10000, 15000, 20000, 25000, 30000, 40000, 50000)
+
+DEFAULT_MAX_PRICE_RUB = max(
+    1000,
+    int(os.getenv("DEFAULT_MAX_PRICE_RUB", "25000")),
+)
+
+
+def _nearest_preset(price: int, presets: tuple[int, ...]) -> int:
+    if not presets:
+        return price
+    if price <= presets[0]:
+        return presets[0]
+    if price >= presets[-1]:
+        return presets[-1]
+    return min(presets, key=lambda p: abs(p - price))
+
+
+def map_max_price_on_country_switch(
+    old_price: int,
+    from_country: str | None,
+    to_country: str | None,
+) -> int:
+    """Сопоставление лимита по индексу пресета (не по курсу валют)."""
+    from_c = str(from_country or "").strip().lower()
+    to_c = str(to_country or "").strip().lower()
+    if from_c == to_c:
+        return old_price
+    if from_c == "by" and to_c == "ru":
+        if old_price in MAX_PRICE_PRESETS:
+            idx = MAX_PRICE_PRESETS.index(old_price)
+            return MAX_PRICE_PRESETS_RUB[min(idx, len(MAX_PRICE_PRESETS_RUB) - 1)]
+        return _nearest_preset(old_price, MAX_PRICE_PRESETS_RUB)
+    if from_c == "ru" and to_c == "by":
+        if old_price in MAX_PRICE_PRESETS_RUB:
+            idx = MAX_PRICE_PRESETS_RUB.index(old_price)
+            return MAX_PRICE_PRESETS[min(idx, len(MAX_PRICE_PRESETS) - 1)]
+        return _nearest_preset(old_price, MAX_PRICE_PRESETS)
+    return old_price
 
 
 def format_price_for_country(

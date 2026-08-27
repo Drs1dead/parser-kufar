@@ -83,11 +83,18 @@ class GeoDbTests(unittest.TestCase):
         db.add_user(chat_id)
         db.update_max_price(chat_id, 5000)
         geo = db.update_country(chat_id, COUNTRY_RU)
-        self.assertIn("max_price", geo)
-        self.assertGreater(int(geo["max_price"]), 10000)
+        self.assertEqual(geo.get("max_price"), 50000)
         user = db.get_user(chat_id)
         assert user is not None
-        self.assertGreater(user["max_price"], 10000)
+        self.assertEqual(user["max_price"], 50000)
+
+    def test_update_country_by_from_ru_maps_preset(self) -> None:
+        chat_id = 747474
+        db.add_user(chat_id)
+        db.update_max_price(chat_id, 25000)
+        db.update_country(chat_id, COUNTRY_RU)
+        geo = db.update_country(chat_id, COUNTRY_BY)
+        self.assertEqual(geo.get("max_price"), 1500)
 
 
 if __name__ == "__main__":

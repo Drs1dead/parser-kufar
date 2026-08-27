@@ -48,9 +48,12 @@ HELP_TEXT_BY = (
 
 HELP_TEXT_RU = (
     "<b>Помощь</b>\n\n"
-    "Kufi ищет технику на <b>Avito</b> (Россия) и присылает совпадения. "
+    "Kufi ищет технику на <b>Avito</b> (Россия) и присылает совпадения в Telegram. "
     "Цены — в <b>₽</b>.\n\n"
-    "Выберите <b>Город</b>, модели в <b>Товары</b>, лимит цены — затем включите уведомления.\n\n"
+    "1. <b>Город</b> — Москва, Смоленск или ввод названия\n"
+    "2. <b>Товары</b> — модели iPhone / Samsung\n"
+    "3. <b>Цена</b> — лимит, например 15 000–30 000 ₽\n"
+    "4. <b>Включить</b> — уведомления на главной\n\n"
     "Новости и документы — кнопки ниже."
 )
 
@@ -180,12 +183,20 @@ def home_text(user: dict | None, *, is_new: bool) -> str:
         elif mode == "ideal":
             lines.append("Поток: идеальные")
 
-    if country == COUNTRY_RU and not AVITO_ENABLED:
-        lines.append("Рассылка Avito — скоро.")
-    if models_n == 0:
-        lines.append("Выберите модели в «Товары».")
-    elif not active:
-        lines.append("Уведомления выключены.")
+    if country == COUNTRY_RU:
+        if not AVITO_ENABLED:
+            lines.append("Рассылка Avito — скоро.")
+        elif not user.get("avito_city_id"):
+            lines.append("Шаг 1: выберите город (кнопка «Город»).")
+        elif models_n == 0:
+            lines.append("Шаг 2: выберите модели в «Товары».")
+        elif not active:
+            lines.append("Шаг 3: включите уведомления.")
+    else:
+        if models_n == 0:
+            lines.append("Выберите модели в «Товары».")
+        elif not active:
+            lines.append("Уведомления выключены.")
 
     return "\n".join(lines)
 
@@ -337,15 +348,16 @@ def country_screen_text(user: dict | None) -> str:
     country = normalize_country((user or {}).get("country"))
     flag = FLAG_RU if country == COUNTRY_RU else FLAG_BY
     current = COUNTRY_LABELS.get(country, country)
-    ru_line = (
-        f"{FLAG_RU} Россия — Avito"
-        if AVITO_ENABLED
-        else f"{FLAG_RU} Россия — скоро (Avito)"
-    )
+    if AVITO_ENABLED:
+        ru_line = f"{FLAG_RU} Россия — Avito, уведомления работают"
+    else:
+        ru_line = f"{FLAG_RU} Россия — скоро (Avito)"
     return (
         "<b>Страна</b>\n"
-        f"Сейчас: {flag} <b>{current}</b>\n"
-        f"{FLAG_BY} Беларусь — Kufar. {ru_line}."
+        f"Сейчас: {flag} <b>{current}</b>\n\n"
+        f"{FLAG_BY} Беларусь — Kufar.by\n"
+        f"{ru_line}\n"
+        "При смене страны лимит цены подстроится к пресетам валюты."
     )
 
 
@@ -375,13 +387,14 @@ def country_keyboard(user: dict | None) -> InlineKeyboardMarkup:
 
 def avito_city_screen_text(user: dict | None) -> str:
     current = user_avito_city_label(user)
-    hint = ""
-    if not AVITO_ENABLED:
-        hint = "\nРассылка Avito ещё не запущена — город можно выбрать заранее."
+    if AVITO_ENABLED:
+        hint = "\n\nПосле города — «Товары», «Цена» и «Включить» на главной."
+    else:
+        hint = "\n\nРассылка Avito ещё не запущена — город можно выбрать заранее."
     return (
         "<b>Город (Avito)</b>\n"
         f"Сейчас: <b>{current}</b>\n"
-        "Введите название, например Москва или Смоленск."
+        "Кнопки ниже или ввод названия — Москва, Смоленск и др."
         f"{hint}"
     )
 
@@ -513,13 +526,21 @@ def price_screen_text(user: dict | None) -> str:
         if cur is not None
         else "не задана"
     )
+    country = normalize_country((user or {}).get("country"))
+    hint = ""
+    if country == COUNTRY_RU:
+        hint = (
+            "\n\nБ/у смартфоны чаще всего 10–50 тыс. ₽ — "
+            "выберите лимит кнопкой ниже."
+        )
     extra = ""
     if user and user.get("role") == "vip":
         extra = "\n\nСвоя сумма — кнопка ниже."
     return (
         "<b>Цена</b>\n"
         f"Сейчас: {cur_txt}\n"
-        "Не дороже этой суммы."
+        "Показывать объявления не дороже этой суммы."
+        f"{hint}"
         f"{extra}"
     )
 
@@ -539,7 +560,7 @@ def promo_back_keyboard() -> InlineKeyboardMarkup:
 def custom_price_prompt_text(user: dict | None = None) -> str:
     country = normalize_country((user or {}).get("country"))
     sign = "₽" if country == COUNTRY_RU else "Br"
-    example = "120000" if country == COUNTRY_RU else "1200"
+    example = "25000" if country == COUNTRY_RU else "1200"
     return (
         "🎯 <b>Своя цена</b> (VIP)\n\n"
         f"Введите максимум в {sign} — одним числом.\n"

@@ -9,15 +9,14 @@ from pathlib import Path
 from typing import Optional
 
 from config import (
-    BYN_TO_RUB,
     DB_PATH as DB_PATH_OVERRIDE,
     DEFAULT_KEYWORDS,
     DEFAULT_MAX_PRICE,
     DEFAULT_MEMORY_VOLUMES,
     MEMORY_VOLUME_OPTIONS,
+    map_max_price_on_country_switch,
     PRICE_DATA_RETENTION_DAYS,
     REFERRAL_VIP_DAYS_PER_FRIEND,
-    RUB_TO_BYN,
     SEEN_ADS_RETENTION_DAYS,
     SQLITE_BUSY_TIMEOUT,
     SQLITE_SYNCHRONOUS,
@@ -651,12 +650,7 @@ def update_country(chat_id: int, country: str) -> dict[str, str | int]:
     )
     out: dict[str, str | int] = {"country": c, "primary_source": source}
     if user and old_country != c:
-        if c == COUNTRY_RU and old_country == COUNTRY_BY:
-            new_price = max(10000, round(old_price * BYN_TO_RUB))
-        elif c == COUNTRY_BY and old_country == COUNTRY_RU:
-            new_price = max(1, round(old_price * RUB_TO_BYN))
-        else:
-            new_price = old_price
+        new_price = map_max_price_on_country_switch(old_price, old_country, c)
         if new_price != old_price:
             out["max_price"] = update_max_price(chat_id, new_price)
     return out

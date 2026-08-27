@@ -279,11 +279,22 @@ async def on_country(cb: CallbackQuery, state: FSMContext) -> None:
         if geo.get("max_price") is not None:
             user["max_price"] = geo["max_price"]
         uid = cb.from_user.id if cb.from_user else 0
+        notice = f"{FLAG_RU} Россия · Avito"
+        if geo.get("max_price") is not None:
+            notice += f" · {format_price_for_user(user['max_price'], user)}"
+        if not user.get("avito_city_id"):
+            await flush_screen(
+                cb,
+                avito_city_screen_text(user),
+                reply_markup=avito_city_keyboard(user),
+                notice=notice,
+            )
+            return
         await flush_screen(
             cb,
             home_text(user, is_new=False),
             reply_markup=home_keyboard(is_admin=is_admin(uid), user=user),
-            notice=f"{FLAG_RU} Россия · Avito",
+            notice=notice,
         )
         return
 

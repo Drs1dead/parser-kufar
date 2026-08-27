@@ -1,7 +1,13 @@
 """UI price formatting by country."""
 import unittest
 
-from config import format_price_for_country, format_price_for_user
+from config import (
+    format_price_for_country,
+    format_price_for_user,
+    map_max_price_on_country_switch,
+    MAX_PRICE_PRESETS,
+    MAX_PRICE_PRESETS_RUB,
+)
 from marketplace.types import COUNTRY_RU, SOURCE_AVITO, SOURCE_KUFAR
 
 
@@ -17,7 +23,19 @@ class PriceFormatTests(unittest.TestCase):
 
     def test_format_price_for_user_ru(self) -> None:
         user = {"country": COUNTRY_RU, "primary_source": SOURCE_AVITO}
-        self.assertIn("₽", format_price_for_user(142500, user))
+        self.assertIn("₽", format_price_for_user(25000, user))
+
+    def test_map_price_by_to_ru_preset(self) -> None:
+        self.assertEqual(
+            map_max_price_on_country_switch(2000, "by", "ru"),
+            MAX_PRICE_PRESETS_RUB[5],
+        )
+
+    def test_map_price_ru_to_by_preset(self) -> None:
+        self.assertEqual(
+            map_max_price_on_country_switch(25000, "ru", "by"),
+            MAX_PRICE_PRESETS[4],
+        )
 
 
 if __name__ == "__main__":
