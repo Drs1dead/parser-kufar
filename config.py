@@ -250,6 +250,15 @@ KUFAR_CATALOG_COMPARE = os.getenv("KUFAR_CATALOG_COMPARE", "").strip().lower() i
 FETCH_CACHE_TTL_SECONDS = max(1, int(os.getenv("FETCH_CACHE_TTL_SECONDS", "18")))
 MAX_AD_PHOTOS = max(1, int(os.getenv("MAX_AD_PHOTOS", "3")))
 AD_DESCRIPTION_MAX_CHARS = max(50, int(os.getenv("AD_DESCRIPTION_MAX_CHARS", "350")))
+AD_DESCRIPTION_MAX_CHARS_REGULAR = max(
+    50, int(os.getenv("AD_DESCRIPTION_MAX_CHARS_REGULAR", "150"))
+)
+
+# Курсы для тройного отображения цен (настраиваются в .env).
+BYN_TO_RUB = float(os.getenv("BYN_TO_RUB", "28.5"))
+BYN_TO_USD = float(os.getenv("BYN_TO_USD", "0.32"))
+RUB_TO_BYN = float(os.getenv("RUB_TO_BYN", "0.035"))
+RUB_TO_USD = float(os.getenv("RUB_TO_USD", "0.011"))
 
 # Не целый телефон: проверка по title + summary (стемы ловят стекла/стёкла).
 ACCESSORY_HEADLINE_STEMS: tuple[str, ...] = (

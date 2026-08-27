@@ -30,13 +30,10 @@ TERMS_OF_SERVICE_URL = "https://telegra.ph/PUBLICHNAYA-OFERTA-08-12-15"
 SUPPORT_URL = "https://t.me/kufiBY"
 
 HELP_TEXT = (
-    "💡 <b>Как пользоваться</b>\n\n"
-    "Бот ищет технику на <b>Kufar.by</b> и присылает подходящие объявления. "
+    "<b>Помощь</b>\n\n"
+    "Kufi ищет технику на <b>Kufar.by</b> и присылает совпадения. "
     f"Цены — в <b>{CURRENCY_SIGN}</b>.\n\n"
-    "Одна категория за раз: смартфоны, ноутбуки, планшеты или часы.\n\n"
-    "1. <b>Товары</b> — категория и модели\n"
-    "2. <b>Цена</b>, <b>город</b> и (для смартфонов) <b>память</b>\n"
-    "3. <b>Включить уведомления</b>\n\n"
+    "Настройте <b>Товары</b>, лимит и город, затем включите уведомления.\n\n"
     "Новости и документы — кнопки ниже."
 )
 
@@ -103,57 +100,49 @@ def help_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def user_location_label(user: dict | None) -> str:
-    country = normalize_country((user or {}).get("country"))
-    city = user_city_label(user)
-    return f"{COUNTRY_LABELS.get(country, country)} · {city}"
-
-
 def home_text(user: dict | None, *, is_new: bool) -> str:
     if user is None:
         return (
             "<b>Kufi</b>\n"
-            "поиск техники на Kufar\n\n"
-            "Нажмите <code>/start</code>."
+            "Kufar · нажмите <code>/start</code>"
         )
 
     active = user.get("active")
     models_n = _kw_count(user)
     max_p = user.get("max_price") or 0
-    bell = "🔔 Вкл" if active else "🔕 Пауза"
+    status = "уведомления включены" if active else "на паузе"
     cat = category_label(user.get("product_category"))
-    line1 = f"{bell} · {cat} · {models_n} {_plural_models(models_n)}"
-    line2 = f"до {format_price(max_p)} · {user_location_label(user)}"
+    lines = [
+        "<b>Kufi</b>",
+        f"Kufar · {status}",
+        "",
+        f"{cat} · {models_n} {_plural_models(models_n)}",
+    ]
+    geo = user_city_label(user)
+    detail = f"до {format_price(max_p)} · {geo}"
     if is_phones_category(user.get("product_category")):
         mem = (user.get("memory_volumes") or list(DEFAULT_MEMORY_VOLUMES))
         mem_txt = ", ".join(format_memory_volume(v, short=True) for v in mem)
-        line2 += f" · {mem_txt}"
+        detail += f" · {mem_txt}"
+    lines.append(detail)
 
-    lines = ["<b>Kufi</b>", "поиск техники на Kufar", "", line1, line2]
     if is_new:
-        step2 = "2. Цена, город и память" if is_phones_category(
-            user.get("product_category")
-        ) else "2. Цена и город"
-        lines += [
-            "",
-            "1. Товары — категория и модели",
-            step2,
-            "3. Включить уведомления",
-        ]
+        hint = "Товары и фильтры — кнопки ниже, затем включите уведомления."
+        lines += ["", hint]
 
     mode = user.get("vip_feed_mode") or "normal"
     if user.get("role") == "vip":
         if mode == "below_market":
-            lines += ["", "Поток: <b>ниже рынка</b>"]
+            lines.append("Поток: ниже рынка")
         elif mode == "exchange":
-            lines += ["", "Поток: <b>только обмен</b>"]
+            lines.append("Поток: только обмен")
         elif mode == "ideal":
-            lines += ["", "Поток: <b>идеальные</b>"]
+            lines.append("Поток: идеальные")
 
     if models_n == 0:
-        lines += ["", "Сначала выберите модели в «Товары»."]
+        lines.append("Выберите модели в «Товары».")
     elif not active:
-        lines += ["", "Уведомления выключены."]
+        lines.append("Уведомления выключены.")
 
     return "\n".join(lines)
 
@@ -178,21 +167,25 @@ def home_keyboard(*, is_admin: bool, user: dict | None = None) -> InlineKeyboard
         rows.append(
             [InlineKeyboardButton(text="🔔 Включить", callback_data="nav:resume")]
         )
-    rows.append([InlineKeyboardButton(text="📱 Товары", callback_data="nav:goods")])
-    filter_row = [
-        InlineKeyboardButton(text="🌍 Страна", callback_data="nav:country"),
-        InlineKeyboardButton(text="💰 Цена", callback_data="nav:price"),
-        InlineKeyboardButton(text="📍 Город", callback_data="nav:city"),
-    ]
-    if is_phones_category((user or {}).get("product_category")):
-        filter_row.append(
-            InlineKeyboardButton(text="💾 Память", callback_data="nav:memory")
-        )
-    rows.append(filter_row)
     rows.append(
         [
             InlineKeyboardButton(text="⭐ VIP", callback_data="nav:vip"),
             InlineKeyboardButton(text="💡 Помощь", callback_data="nav:help"),
+        ]
+    )
+    goods_row = [
+        InlineKeyboardButton(text="📱 Товары", callback_data="nav:goods"),
+        InlineKeyboardButton(text="💰 Цена", callback_data="nav:price"),
+    ]
+    if is_phones_category((user or {}).get("product_category")):
+        goods_row.append(
+            InlineKeyboardButton(text="💾 Память", callback_data="nav:memory")
+        )
+    rows.append(goods_row)
+    rows.append(
+        [
+            InlineKeyboardButton(text="🌍 Страна", callback_data="nav:country"),
+            InlineKeyboardButton(text="📍 Город", callback_data="nav:city"),
         ]
     )
     if is_admin:
@@ -269,8 +262,8 @@ def memory_screen_text(user: dict | None) -> str:
         else "Обычный аккаунт: один объём."
     )
     return (
-        "💾 <b>Память</b>\n\n"
-        f"Сейчас: <b>{selected}</b>\n\n"
+        "<b>Память</b>\n"
+        f"Сейчас: <b>{selected}</b>\n"
         f"{limit}"
     )
 
@@ -301,9 +294,9 @@ def country_screen_text(user: dict | None) -> str:
     country = normalize_country((user or {}).get("country"))
     current = COUNTRY_LABELS.get(country, country)
     return (
-        "🌍 <b>Страна</b>\n\n"
-        f"Сейчас: <b>{current}</b>\n\n"
-        "Беларусь — поиск на Kufar. Россия — скоро (Avito)."
+        "<b>Страна</b>\n"
+        f"Сейчас: <b>{current}</b>\n"
+        "Беларусь — Kufar. Россия — скоро (Avito)."
     )
 
 
@@ -332,9 +325,9 @@ def country_keyboard(user: dict | None) -> InlineKeyboardMarkup:
 def city_screen_text(user: dict | None) -> str:
     current = user_city_label(user)
     return (
-        f"📍 <b>Город</b>\n\n"
-        f"Сейчас: <b>{current}</b>\n\n"
-        "Введите название или выберите область целиком."
+        "<b>Город</b>\n"
+        f"Сейчас: <b>{current}</b>\n"
+        "Введите название или выберите область."
     )
 
 
@@ -403,9 +396,9 @@ def price_screen_text(user: dict | None) -> str:
     if user and user.get("role") == "vip":
         extra = "\n\nСвоя сумма — кнопка ниже."
     return (
-        f"💰 <b>Цена</b>\n\n"
-        f"Сейчас: {cur_txt}\n\n"
-        f"Не дороже этой суммы."
+        "<b>Цена</b>\n"
+        f"Сейчас: {cur_txt}\n"
+        "Не дороже этой суммы."
         f"{extra}"
     )
 

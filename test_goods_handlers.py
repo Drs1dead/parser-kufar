@@ -43,16 +43,18 @@ class HomeUiTests(unittest.TestCase):
         }
         text = home_text(user, is_new=False)
         self.assertIn("<b>Kufi</b>", text)
-        self.assertIn("поиск техники на Kufar", text)
-        self.assertIn("🔔 Вкл", text)
+        self.assertIn("Kufar", text)
+        self.assertIn("уведомления включены", text)
         self.assertIn("Смартфоны", text)
         self.assertNotIn("поиск телефонов", text)
 
-    def test_home_filters_on_one_row(self) -> None:
+    def test_home_filters_layout(self) -> None:
         user = {"active": True, "product_category": "phones"}
         kb = home_keyboard(is_admin=False, user=user)
         labels = [[btn.text for btn in row] for row in kb.inline_keyboard]
-        self.assertIn(["🌍 Страна", "💰 Цена", "📍 Город", "💾 Память"], labels)
+        self.assertIn(["⭐ VIP", "💡 Помощь"], labels)
+        self.assertIn(["📱 Товары", "💰 Цена", "💾 Память"], labels)
+        self.assertIn(["🌍 Страна", "📍 Город"], labels)
 
 
 class ModelLabelTests(unittest.TestCase):

@@ -2,8 +2,17 @@ import re
 from html import escape
 from datetime import datetime, timezone
 
-from config import DISPLAY_TZ, AD_DESCRIPTION_MAX_CHARS, format_local_datetime, format_memory_volume, format_price
+from config import (
+    AD_DESCRIPTION_MAX_CHARS,
+    AD_DESCRIPTION_MAX_CHARS_REGULAR,
+    DISPLAY_TZ,
+    format_local_datetime,
+    format_memory_volume,
+    format_price,
+)
+from currency_display import format_triple_price
 from kufar_catalog import user_city_label
+from marketplace.types import normalize_country
 from product_catalog import category_label
 
 _CAPTION_SAFE_MAX = 980
@@ -62,24 +71,32 @@ def format_ad(
     market_avg_price: int | None = None,
     below_market: bool = False,
     ideal_feed: bool = False,
+    compact: bool = False,
+    country: str | None = None,
 ) -> str:
     """Превращает словарь объявления в HTML-сообщение для Telegram."""
     title = _esc(ad.get("title") or "Без названия")
+    user_country = normalize_country(country)
 
     price = ad.get("price")
     price_usd = ad.get("price_usd")
-    if price is not None:
-        price_str = format_price(price)
-        if price_usd:
-            price_str += f" · ≈ {price_usd}$"
+    if price is not None and isinstance(price, int):
+        price_str = format_triple_price(
+            price,
+            country=user_country,
+            price_usd_hint=price_usd if isinstance(price_usd, int) else None,
+        )
     else:
         price_str = "не указана"
 
     location = _esc(ad.get("location") or "")
     summary = _esc((ad.get("summary") or "").strip())
     desc_raw = (ad.get("description") or "").strip()
-    if len(desc_raw) > AD_DESCRIPTION_MAX_CHARS:
-        desc_raw = desc_raw[: AD_DESCRIPTION_MAX_CHARS - 1].rstrip() + "…"
+    desc_limit = (
+        AD_DESCRIPTION_MAX_CHARS_REGULAR if compact else AD_DESCRIPTION_MAX_CHARS
+    )
+    if len(desc_raw) > desc_limit:
+        desc_raw = desc_raw[: desc_limit - 1].rstrip() + "…"
     description = _esc(desc_raw)
     link = ad.get("link") or ""
     listed = _format_list_time(ad.get("list_time"))
@@ -92,15 +109,16 @@ def format_ad(
         parts.append("🔥 <b>Ниже рынка</b>")
         parts.append("")
     parts.append(f"<b>{title}</b>")
-    parts.append(f"💰 <b>{_esc(price_str)}</b>")
+    parts.append(f"<b>{_esc(price_str)}</b>")
     if market_avg_price is not None:
-        parts.append(f"📊 Средняя на Kufar · <b>{format_price(market_avg_price)}</b>")
+        avg_str = format_triple_price(market_avg_price, country=user_country)
+        parts.append(f"Средняя · {_esc(avg_str)}")
     if summary:
-        parts.append(f"📋 {summary}")
+        parts.append(summary)
     if location:
-        parts.append(f"📍 {location}")
-    if listed:
-        parts.append(f"🕐 Опубликовано · {listed}")
+        parts.append(location)
+    if listed and not compact:
+        parts.append(f"Опубликовано · {listed}")
     if description:
         parts.append("")
         parts.append(description)

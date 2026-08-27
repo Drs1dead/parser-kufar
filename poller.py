@@ -55,7 +55,7 @@ from marketplace.keys import (
     user_primary_source,
 )
 from marketplace.registry import get_adapter
-from marketplace.types import normalize_primary_source
+from marketplace.types import normalize_country, normalize_primary_source
 from kufar_fetch import (
     DEFAULT_HEADERS,
     enrich_ads_descriptions,
@@ -194,6 +194,8 @@ async def _send_ad(
     below_market: bool = False,
     ideal_feed: bool = False,
     include_photos: bool = False,
+    compact: bool = False,
+    country: str | None = None,
 ) -> tuple[bool, bool]:
     """(доставлено, пользователь отключён — блокировка бота)."""
     text = truncate_ad_caption(
@@ -202,6 +204,8 @@ async def _send_ad(
             market_avg_price=market_avg_price,
             below_market=below_market,
             ideal_feed=ideal_feed,
+            compact=compact,
+            country=country,
         )
     )
     photos = [p for p in (ad.get("photo_urls") or []) if isinstance(p, str) and p.strip()]
@@ -352,6 +356,8 @@ async def _process_user(
             below_market=below_market,
             ideal_feed=ideal_mode,
             include_photos=is_vip,
+            compact=not is_vip,
+            country=normalize_country(user.get("country")),
         )
         if ok:
             mark_seen(chat_id, link, source=source)
