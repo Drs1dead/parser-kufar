@@ -10,7 +10,14 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-GEO_PATH = Path(__file__).resolve().parent / "data" / "kufar_geo.json"
+_ROOT = Path(__file__).resolve().parent
+
+# geo/ — в git и на деплое; data/ — legacy и ручная копия на BotHost.
+_GEO_CANDIDATES: tuple[Path, ...] = (
+    _ROOT / "geo" / "kufar_geo.json",
+    _ROOT / "data" / "kufar_geo.json",
+    Path("/app/data/kufar_geo.json"),
+)
 
 # Точные алиасы: вся область (ar=None) или конкретный НП.
 REGION_SHORTCUTS: dict[str, tuple[int, int | None, str]] = {
@@ -26,6 +33,12 @@ REGION_SHORTCUTS: dict[str, tuple[int, int | None, str]] = {
     "пинск": (1, 4, "Пинск"),
     "борисов": (5, 15, "Борисов"),
     "молодечно": (5, 16, "Молодечно"),
+    "орша": (6, 19, "Орша"),
+    "полоцк": (6, 20, "Полоцк"),
+    "солигорск": (5, 45, "Солигорск"),
+    "жодино": (5, 44, "Жодино"),
+    "слуцк": (5, 17, "Слуцк"),
+    "новополоцк": (6, 46, "Новополоцк"),
 }
 
 REGION_LABEL_BY_RGN: dict[int, str] = {
@@ -52,16 +65,31 @@ def _norm(text: str) -> str:
     return " ".join(str(text).lower().replace("ё", "е").strip().split())
 
 
+def resolve_geo_path() -> Path | None:
+    for path in _GEO_CANDIDATES:
+        if path.is_file():
+            return path
+    return None
+
+
 def geo_data_available() -> bool:
-    return GEO_PATH.is_file()
+    return resolve_geo_path() is not None
 
 
 @lru_cache(maxsize=1)
 def _load_places() -> tuple[GeoPlace, ...]:
-    if not GEO_PATH.is_file():
-        log.error("kufar geo file missing: %s", GEO_PATH)
+    path = resolve_geo_path()
+    if path is None:
+        log.warning(
+            "kufar geo file missing (checked %s) — only shortcut cities work",
+            ", ".join(str(p) for p in _GEO_CANDIDATES),
+        )
         return ()
-    raw = json.loads(GEO_PATH.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.error("kufar geo file unreadable %s: %s", path, exc)
+        return ()
     out: list[GeoPlace] = []
     for item in raw:
         label = str(item.get("label") or "").strip()
@@ -78,6 +106,7 @@ def _load_places() -> tuple[GeoPlace, ...]:
                 region_label=str(item.get("region_label") or ""),
             )
         )
+    log.info("kufar geo loaded %d places from %s", len(out), path)
     return tuple(out)
 
 
@@ -96,7 +125,7 @@ def _shortcut_place(q: str) -> GeoPlace | None:
 
 
 def search_places(query: str, *, limit: int = 5) -> list[GeoPlace]:
-    """Точное совпадение → алиасы → substring → fuzzy."""
+    """Точное совпадение → алиасы → каталог JSON → fuzzy."""
     q = _norm(query)
     if len(q) < 2:
         return []
@@ -107,7 +136,16 @@ def search_places(query: str, *, limit: int = 5) -> list[GeoPlace]:
 
     places = _load_places()
     if not places:
-        return []
+        # Fuzzy по встроенным алиасам, если JSON недоступен.
+        close = difflib.get_close_matches(
+            q, list(REGION_SHORTCUTS.keys()), n=limit, cutoff=0.84
+        )
+        out: list[GeoPlace] = []
+        for name in close:
+            place = _shortcut_place(name)
+            if place is not None:
+                out.append(place)
+        return out
 
     exact = [p for p in places if p.norm == q or _norm(p.label) == q]
     if exact:
@@ -118,11 +156,11 @@ def search_places(query: str, *, limit: int = 5) -> list[GeoPlace]:
         if q in place.norm or q in _norm(place.label):
             hits.append(place)
     if hits:
-        hits.sort(key=lambda p: (p.norm != q, p.norm.startswith(q) is False, len(p.norm)))
+        hits.sort(key=lambda p: (p.norm != q, not p.norm.startswith(q), len(p.norm)))
         return hits[:limit]
 
     close = difflib.get_close_matches(q, [p.norm for p in places], n=limit, cutoff=0.75)
-    out: list[GeoPlace] = []
+    out = []
     for name in close:
         for place in places:
             if place.norm == name:

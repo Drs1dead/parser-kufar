@@ -14,7 +14,7 @@ from config import (
     MEMORY_VOLUME_OPTIONS,
 )
 from kufar_catalog import QUICK_RGN_BUTTONS
-from kufar_geo import geo_data_available, search_places
+from kufar_geo import resolve_geo_path, search_places
 from product_catalog import is_phones_category
 from db import (
     get_user,
@@ -465,16 +465,6 @@ async def on_city_text(msg: Message, state: FSMContext) -> None:
             await msg.answer("Сначала нажми <code>/start</code>.", parse_mode=ParseMode.HTML)
             return
 
-        if not geo_data_available():
-            log.error("city input: geo file missing for chat_id=%s", chat_id)
-            await msg.answer(
-                "Карта городов на сервере не найдена. Попробуйте кнопки областей ниже "
-                "или напишите админу.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=city_keyboard(user),
-            )
-            return
-
         text = (msg.text or "").strip()
         if len(text) < 2:
             await msg.answer(
@@ -486,7 +476,7 @@ async def on_city_text(msg: Message, state: FSMContext) -> None:
         matches = search_places(text, limit=5)
         if not matches:
             await msg.answer(
-                "Ничего не найдено. Попробуйте другое название или выберите область в меню.",
+                "Город не найден. Проверьте название или выберите область кнопкой ниже.",
                 parse_mode=ParseMode.HTML,
                 reply_markup=city_keyboard(user),
             )

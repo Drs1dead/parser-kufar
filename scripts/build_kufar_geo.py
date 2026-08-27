@@ -7,7 +7,8 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "data" / "kufar_geo.json"
+OUT = ROOT / "geo" / "kufar_geo.json"
+LEGACY_OUT = ROOT / "data" / "kufar_geo.json"
 LOCAL_DOC = ROOT / "scripts" / "import_documentation_revision_5.htm"
 DOC_URL = "https://import-docs.kufar.by/import_documentation_revision_5.htm"
 
@@ -72,6 +73,8 @@ def main() -> None:
     places = parse_places(text)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(places, ensure_ascii=False, indent=2), encoding="utf-8")
+    LEGACY_OUT.parent.mkdir(parents=True, exist_ok=True)
+    LEGACY_OUT.write_text(OUT.read_text(encoding="utf-8"), encoding="utf-8")
     print(f"written {len(places)} places -> {OUT}")
 
 

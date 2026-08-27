@@ -8,7 +8,7 @@ poller.py            # Цикл: Kufar → фильтры → отправка
 user_matching.py     # Какие объявления подходят пользователю
 kufar_fetch.py       # Запросы к API Kufar
 kufar_catalog.py     # Фасеты cat/phm/ppm/ot/rgn/ar по категории
-kufar_geo.py         # Поиск населённых пунктов (data/kufar_geo.json)
+kufar_geo.py         # Поиск населённых пунктов (geo/kufar_geo.json)
 product_catalog.py   # Категории и списки моделей
 filters.py           # Правила отбора объявлений
 db.py                # SQLite
