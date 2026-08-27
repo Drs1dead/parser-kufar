@@ -7,8 +7,6 @@ query= не используем: это полнотекст, а не филь�
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
-
 from config import DEFAULT_MEMORY_VOLUMES, MEMORY_VOLUME_OPTIONS
 from product_catalog import (
     CAT_LAPTOPS,
@@ -359,38 +357,4 @@ def _watch_search_params(
     ]
 
 
-FetchKey = tuple[str, int, int | None, tuple[str, ...], tuple[str, ...]]
-
-
-def fetch_key_for_user(user: dict | None) -> FetchKey:
-    """Ключ выдачи: категория + город + модели + память (память только у смартфонов)."""
-    category = normalize_category((user or {}).get("product_category"))
-    models = tuple(
-        sorted(
-            {
-                _norm_token(k)
-                for k in (user or {}).get("keywords") or []
-                if str(k).strip()
-            }
-        )
-    )
-    if not is_phones_category(category):
-        return (category, user_rgn(user), user_ar(user), models, ())
-    raw_mem = (user or {}).get("memory_volumes") or list(DEFAULT_MEMORY_VOLUMES)
-    allowed = set(MEMORY_VOLUME_OPTIONS)
-    memories = tuple(
-        sorted(str(v).strip() for v in raw_mem if str(v).strip() in allowed)
-    )
-    if not memories:
-        memories = tuple(DEFAULT_MEMORY_VOLUMES)
-    return (category, user_rgn(user), user_ar(user), models, memories)
-
-
-def group_users_by_fetch_key(users: list[dict]) -> dict[FetchKey, list[dict]]:
-    groups: dict[FetchKey, list[dict]] = defaultdict(list)
-    for user in users:
-        key = fetch_key_for_user(user)
-        if not key[3]:
-            continue
-        groups[key].append(user)
-    return dict(groups)
+from marketplace.keys import FetchKey, fetch_key_for_user, group_users_by_fetch_key

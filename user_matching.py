@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 from config import FILTER_DEBUG_LOG, KUFAR_USE_CATALOG, MARKET_DISCOUNT_THRESHOLD
 from db import avg_market_price
+from marketplace.keys import user_primary_source
 from filters import (
     ad_device_key,
     exchange_reject_reason,
@@ -88,11 +89,21 @@ def _log_reject(ad: dict, user: dict, *, max_price: int, feed_mode: str) -> None
         log_filter_reject(ad, reason, chat_id=user["chat_id"], feed_mode=feed_mode)
 
 
-def _market_avg(device_key: str, cache: dict[str, int | None]) -> int | None:
-    if device_key in cache:
-        return cache[device_key]
-    value = avg_market_price(device_key)
-    cache[device_key] = value
+def _market_cache_key(device_key: str, source: str) -> str:
+    return f"{source}:{device_key}"
+
+
+def _market_avg(
+    device_key: str,
+    cache: dict[str, int | None],
+    user: dict,
+) -> int | None:
+    source = user_primary_source(user)
+    ck = _market_cache_key(device_key, source)
+    if ck in cache:
+        return cache[ck]
+    value = avg_market_price(device_key, source=source)
+    cache[ck] = value
     return value
 
 
@@ -122,7 +133,7 @@ def _below_market_accept(ad: dict, user: dict, market_cache: dict[str, int | Non
     price = ad.get("price")
     if not dk or not isinstance(price, int) or price <= 0:
         return False
-    mavg = _market_avg(dk, market_cache)
+    mavg = _market_avg(dk, market_cache, user)
     return bool(mavg and price < int(mavg * MARKET_DISCOUNT_THRESHOLD))
 
 

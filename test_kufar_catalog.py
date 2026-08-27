@@ -161,8 +161,9 @@ class FetchKeyTests(unittest.TestCase):
             "memory_volumes": ["256"],
         }
         self.assertEqual(fetch_key_for_user(a), fetch_key_for_user(b))
-        self.assertEqual(fetch_key_for_user(a)[1], 7)
-        self.assertEqual(fetch_key_for_user(a)[0], "phones")
+        self.assertEqual(fetch_key_for_user(a)[0], "kufar")
+        self.assertEqual(fetch_key_for_user(a)[1], "phones")
+        self.assertEqual(fetch_key_for_user(a)[2], 7)
 
     def test_same_model_different_city_two_keys(self) -> None:
         minsk = {
@@ -179,10 +180,10 @@ class FetchKeyTests(unittest.TestCase):
         }
         key_m = fetch_key_for_user(minsk)
         key_b = fetch_key_for_user(brest)
-        self.assertEqual(key_m[2], key_b[2])
         self.assertEqual(key_m[3], key_b[3])
-        self.assertEqual(key_m[1], 7)
-        self.assertEqual(key_b[1], 1)
+        self.assertEqual(key_m[4], key_b[4])
+        self.assertEqual(key_m[2], 7)
+        self.assertEqual(key_b[2], 1)
         self.assertNotEqual(key_m, key_b)
 
     def test_settlement_ar_differs_from_region_only(self) -> None:
@@ -225,9 +226,11 @@ class FetchKeyTests(unittest.TestCase):
         }
         key_p = fetch_key_for_user(phones)
         key_w = fetch_key_for_user(watches)
-        self.assertEqual(key_p[0], "phones")
-        self.assertEqual(key_w[0], "watches")
-        self.assertEqual(key_w[4], ())
+        self.assertEqual(key_p[0], "kufar")
+        self.assertEqual(key_w[0], "kufar")
+        self.assertEqual(key_p[1], "phones")
+        self.assertEqual(key_w[1], "watches")
+        self.assertEqual(key_w[5], ())
         self.assertNotEqual(key_p, key_w)
 
 

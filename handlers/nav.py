@@ -22,11 +22,13 @@ from db import (
     set_active,
     set_vip,
     update_city,
+    update_country,
     update_geo,
     update_max_price,
     update_memory_volumes,
     update_vip_feed_mode,
 )
+from marketplace.types import COUNTRY_BY, normalize_country
 from bot_ui import (
     HELP_TEXT,
     back_keyboard,
@@ -35,6 +37,8 @@ from bot_ui import (
     city_pick_keyboard,
     city_screen_text,
     city_typed_prompt_text,
+    country_keyboard,
+    country_screen_text,
     custom_price_prompt_text,
     help_keyboard,
     home_keyboard,
@@ -218,6 +222,37 @@ async def on_city_select(cb: CallbackQuery) -> None:
     )
 
 
+@router.callback_query(lambda c: (c.data or "").startswith("country:"))
+async def on_country(cb: CallbackQuery, state: FSMContext) -> None:
+    if cb.message is None:
+        await cb.answer()
+        return
+    user = await require_user_cb(cb)
+    if user is None:
+        return
+    chat_id = cb.message.chat.id
+    data = cb.data or ""
+
+    if data == "country:by":
+        await state.clear()
+        geo = update_country(chat_id, COUNTRY_BY)
+        user["country"] = geo["country"]
+        user["primary_source"] = geo["primary_source"]
+        await flush_screen(
+            cb,
+            city_screen_text(user),
+            reply_markup=city_keyboard(user),
+            notice="🌍 Беларусь",
+        )
+        return
+
+    if data == "country:ru":
+        await cb.answer("Скоро — Avito", show_alert=True)
+        return
+
+    await cb.answer()
+
+
 @router.callback_query(lambda c: (c.data or "").startswith("nav:"))
 async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
     if cb.message is None:
@@ -339,7 +374,19 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
             )
             return
 
+        if data == "nav:country":
+            await state.clear()
+            await flush_screen(
+                cb,
+                country_screen_text(user),
+                reply_markup=country_keyboard(user),
+            )
+            return
+
         if data == "nav:city":
+            if normalize_country(user.get("country")) != COUNTRY_BY:
+                await cb.answer("Город для России — после запуска Avito", show_alert=True)
+                return
             await state.clear()
             await flush_screen(
                 cb,

@@ -15,6 +15,7 @@ from config import (
 )
 from db import count_referrals, ensure_referral_code
 from kufar_catalog import QUICK_RGN_BUTTONS, user_city_label
+from marketplace.types import COUNTRY_BY, COUNTRY_LABELS, normalize_country
 from product_catalog import (
     category_label,
     is_phones_category,
@@ -102,6 +103,12 @@ def help_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def user_location_label(user: dict | None) -> str:
+    country = normalize_country((user or {}).get("country"))
+    city = user_city_label(user)
+    return f"{COUNTRY_LABELS.get(country, country)} · {city}"
+
+
 def home_text(user: dict | None, *, is_new: bool) -> str:
     if user is None:
         return (
@@ -116,7 +123,7 @@ def home_text(user: dict | None, *, is_new: bool) -> str:
     bell = "🔔 Вкл" if active else "🔕 Пауза"
     cat = category_label(user.get("product_category"))
     line1 = f"{bell} · {cat} · {models_n} {_plural_models(models_n)}"
-    line2 = f"до {format_price(max_p)} · {user_city_label(user)}"
+    line2 = f"до {format_price(max_p)} · {user_location_label(user)}"
     if is_phones_category(user.get("product_category")):
         mem = (user.get("memory_volumes") or list(DEFAULT_MEMORY_VOLUMES))
         mem_txt = ", ".join(format_memory_volume(v, short=True) for v in mem)
@@ -173,6 +180,7 @@ def home_keyboard(*, is_admin: bool, user: dict | None = None) -> InlineKeyboard
         )
     rows.append([InlineKeyboardButton(text="📱 Товары", callback_data="nav:goods")])
     filter_row = [
+        InlineKeyboardButton(text="🌍 Страна", callback_data="nav:country"),
         InlineKeyboardButton(text="💰 Цена", callback_data="nav:price"),
         InlineKeyboardButton(text="📍 Город", callback_data="nav:city"),
     ]
@@ -287,6 +295,38 @@ def memory_keyboard(user: dict | None) -> InlineKeyboardMarkup:
         rows.append(row)
     rows.append(back_row())
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def country_screen_text(user: dict | None) -> str:
+    country = normalize_country((user or {}).get("country"))
+    current = COUNTRY_LABELS.get(country, country)
+    return (
+        "🌍 <b>Страна</b>\n\n"
+        f"Сейчас: <b>{current}</b>\n\n"
+        "Беларусь — поиск на Kufar. Россия — скоро (Avito)."
+    )
+
+
+def country_keyboard(user: dict | None) -> InlineKeyboardMarkup:
+    country = normalize_country((user or {}).get("country"))
+    by_mark = " ✅" if country == COUNTRY_BY else ""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"Беларусь{by_mark}",
+                    callback_data="country:by",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Россия · скоро",
+                    callback_data="country:ru",
+                )
+            ],
+            back_row(),
+        ]
+    )
 
 
 def city_screen_text(user: dict | None) -> str:

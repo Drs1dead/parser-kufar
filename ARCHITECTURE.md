@@ -17,6 +17,13 @@ bot_ui.py            # Тексты и клавиатуры меню
 formatter.py         # Формат карточки объявления
 goods_tree.py        # Линейки внутри категории
 
+marketplace/
+  types.py           # NormalizedAd, SOURCE_*, COUNTRY_*
+  protocol.py        # MarketplaceAdapter Protocol
+  kufar.py           # Адаптер Kufar (normalize + fetch_for_key)
+  registry.py        # get_adapter / adapter_for_user
+  keys.py            # FetchKey (source + категория + geo + модели + память)
+
 handlers/
   __init__.py        # Собирает все роутеры
   start.py           # /start, рефералка, ответ на текст
@@ -30,11 +37,20 @@ handlers/
 
 ## Поток рассылки
 
-1. `poller` берёт due-пользователей. При `KUFAR_USE_CATALOG` группирует их по ключу `категория + rgn + ar + модели + память` (память только у смартфонов) и качает Kufar **один раз на ключ** (с TTL-кэшем ~18 с). Текстовый `query` не используем: на Kufar это полнотекст, а не фильтр модели.
+1. `poller` берёт due-пользователей с `country=by` и `primary_source=kufar` (Россия/Avito — без poll до Фазы Avito). При `KUFAR_USE_CATALOG` группирует их по ключу `source + категория + rgn + ar + модели + память` (память только у смартфонов) и качает маркетплейс **один раз на ключ** через `get_adapter(source).fetch_for_key` (TTL-кэш ~18 с). Текстовый `query` не используем: на Kufar это полнотекст, а не фильтр модели.
 2. Для каждого due — `match_ads_for_user` по батчу его ключа. При catalog: без `smart_filtering` (кроме VIP «идеальные»), магазины (`company_ad`) и тонкий антихлам в заголовке; модель (и память у смартфонов) ещё раз проверяются локально.
 3. Новые объявления отправляются в Telegram (`formatter.format_ad`).
 
-Фасеты: [`kufar_catalog.py`](kufar_catalog.py). Старый текстовый fetch (`KUFAR_QUERIES`) — если `KUFAR_USE_CATALOG=false`.
+Фасеты: [`kufar_catalog.py`](kufar_catalog.py). Нормализация объявлений и fetch — [`marketplace/kufar.py`](marketplace/kufar.py). Старый текстовый fetch (`KUFAR_QUERIES`) — если `KUFAR_USE_CATALOG=false`.
+
+### Профиль: страна и маркетплейс
+
+| Поле | Значения | Назначение |
+|------|----------|------------|
+| `users.country` | `by` / `ru` | Страна в UI |
+| `users.primary_source` | `kufar` / `avito` | Адаптер для fetch и `source` в seen/prices |
+
+Сейчас активен только `by` + `kufar`. `seen_ads` и `market_prices` фильтруются по `source`.
 
 ### VIP-потоки (`users.vip_feed_mode`)
 

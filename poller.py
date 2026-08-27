@@ -46,13 +46,20 @@ from db import (
 from filters import ad_device_key, is_whole_phone_listing, matches_filters
 from filters import ideal_passes
 from formatter import format_ad, truncate_ad_caption
-from kufar_catalog import FetchKey, fetch_key_for_user, group_users_by_fetch_key
 from logging_setup import log_exception
+from marketplace.keys import (
+    FetchKey,
+    fetch_key_for_user,
+    group_users_by_fetch_key,
+    user_is_pollable,
+    user_primary_source,
+)
+from marketplace.registry import get_adapter
+from marketplace.types import normalize_primary_source
 from kufar_fetch import (
     DEFAULT_HEADERS,
     enrich_ads_descriptions,
     fetch_ads,
-    fetch_ads_for_key,
 )
 from product_catalog import is_phones_category
 from user_matching import VIP_SPECIAL_MAX_PRICE, match_ads_for_user
@@ -75,7 +82,7 @@ FIRST_RUN_DIGEST_MSG = (
 
 def _ingest_market_prices_from_ads(ads: list[dict]) -> None:
     """Пополняет market_prices только целыми телефонами из батча листинга."""
-    rows: list[tuple[str, str, int]] = []
+    rows: list[tuple[str, str, int, str]] = []
     for ad in ads:
         if not is_whole_phone_listing(ad):
             continue
@@ -96,7 +103,8 @@ def _ingest_market_prices_from_ads(ads: list[dict]) -> None:
             continue
         if not isinstance(link, str) or not link.strip():
             continue
-        rows.append((link, dk, price))
+        source = normalize_primary_source(ad.get("source"))
+        rows.append((link, dk, price, source))
     save_market_prices(rows)
 
 
@@ -265,6 +273,7 @@ async def _process_user(
     chat_id = user["chat_id"]
     is_vip = user.get("role") == "vip"
     feed_mode = (user.get("vip_feed_mode") or "normal") if is_vip else "normal"
+    source = user_primary_source(user)
 
     matched = match_ads_for_user(user, ads, market_cache)
     if not matched:
@@ -276,12 +285,12 @@ async def _process_user(
         to_send = matched[:FIRST_RUN_LIMIT]
         skipped_first_run = max(0, len(matched) - FIRST_RUN_LIMIT)
         for ad in matched[FIRST_RUN_LIMIT:]:
-            mark_seen(chat_id, ad["link"])
+            mark_seen(chat_id, ad["link"], source=source)
     else:
         to_send = matched
 
     links = [ad["link"] for ad in to_send if ad.get("link")]
-    already_seen = seen_links_for(chat_id, links)
+    already_seen = seen_links_for(chat_id, links, source=source)
 
     ideal_mode = is_vip and feed_mode == "ideal"
     need_desc = [
@@ -305,7 +314,7 @@ async def _process_user(
             ):
                 strict_ok.append(ad)
             else:
-                mark_seen(chat_id, link)
+                mark_seen(chat_id, link, source=source)
                 already_seen.add(link)
         to_send = strict_ok
         if not to_send:
@@ -318,10 +327,11 @@ async def _process_user(
 
         device_key = ad_device_key(ad)
         price = ad.get("price")
-        market_avg = market_cache.get(device_key) if device_key else None
+        cache_key = f"{source}:{device_key}" if device_key else ""
+        market_avg = market_cache.get(cache_key) if device_key else None
         if is_vip and device_key and market_avg is None:
-            market_avg = avg_market_price(device_key)
-            market_cache[device_key] = market_avg
+            market_avg = avg_market_price(device_key, source=source)
+            market_cache[cache_key] = market_avg
 
         below_market = feed_mode == "below_market"
         if (
@@ -344,7 +354,7 @@ async def _process_user(
             include_photos=is_vip,
         )
         if ok:
-            mark_seen(chat_id, link)
+            mark_seen(chat_id, link, source=source)
             already_seen.add(link)
             increment_sent(chat_id)
             await asyncio.sleep(0.05)
@@ -397,15 +407,8 @@ async def _fetch_catalog_groups(
         ) as session:
             batches = await asyncio.gather(
                 *(
-                    fetch_ads_for_key(
-                        category,
-                        rgn,
-                        ar,
-                        models,
-                        memories,
-                        session=session,
-                    )
-                    for category, rgn, ar, models, memories in keys_to_fetch
+                    get_adapter(key[0]).fetch_for_key(key, session=session)
+                    for key in keys_to_fetch
                 )
             )
         for key, ads in zip(keys_to_fetch, batches):
@@ -509,12 +512,18 @@ async def poller(bot: Bot) -> None:
             users = await asyncio.to_thread(get_active_users, expire_vip=False)
             now = time.time()
             vip_due = [
-                u for u in users if _is_vip_user(u) and _should_process_user(u, now=now)
+                u
+                for u in users
+                if _is_vip_user(u)
+                and user_is_pollable(u)
+                and _should_process_user(u, now=now)
             ]
             regular_due = [
                 u
                 for u in users
-                if not _is_vip_user(u) and _should_process_user(u, now=now)
+                if not _is_vip_user(u)
+                and user_is_pollable(u)
+                and _should_process_user(u, now=now)
             ]
             if not vip_due and not regular_due:
                 log.debug("poll skip — no due subscribers")

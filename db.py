@@ -22,6 +22,14 @@ from config import (
     VIP_SUBSCRIPTION_DAYS,
 )
 from kufar_catalog import CITY_RGN, CITY_LABELS, DEFAULT_CITY, normalize_city, RGN_TO_SLUG
+from marketplace.types import (
+    COUNTRY_BY,
+    COUNTRIES,
+    SOURCE_KUFAR,
+    default_source_for_country,
+    normalize_country,
+    normalize_primary_source,
+)
 from product_catalog import (
     DEFAULT_CATEGORY,
     DEVICE_CATALOG_SET,
@@ -83,7 +91,7 @@ _USER_SELECT = (
     "chat_id, active, role, vip_until, max_price, keywords, sent_count, created_at, "
     "vip_feed_mode, username, memory_volumes, referral_code, referred_by, "
     "poll_last_vip, poll_last_regular, city, product_category, "
-    "city_rgn, city_ar, city_label"
+    "city_rgn, city_ar, city_label, country, primary_source"
 )
 
 def _row_to_user(row: tuple) -> dict:
@@ -115,6 +123,10 @@ def _row_to_user(row: tuple) -> dict:
             (row[19] or "").strip()
             if len(row) > 19 and row[19]
             else CITY_LABELS[DEFAULT_CITY]
+        ),
+        "country": normalize_country(row[20] if len(row) > 20 else None),
+        "primary_source": normalize_primary_source(
+            row[21] if len(row) > 21 else None
         ),
     }
 
@@ -340,6 +352,30 @@ def init_db() -> None:
         geo_added = True
     if geo_added:
         _backfill_city_geo_from_slug()
+    cols = _table_columns("users")
+    if "country" not in cols:
+        _execute(
+            f"ALTER TABLE users ADD COLUMN country TEXT NOT NULL DEFAULT '{COUNTRY_BY}'"
+        )
+    if "primary_source" not in cols:
+        _execute(
+            f"ALTER TABLE users ADD COLUMN primary_source TEXT NOT NULL DEFAULT '{SOURCE_KUFAR}'"
+        )
+    seen_cols = _table_columns("seen_ads")
+    if "source" not in seen_cols:
+        _execute(
+            f"ALTER TABLE seen_ads ADD COLUMN source TEXT NOT NULL DEFAULT '{SOURCE_KUFAR}'"
+        )
+    market_cols = _table_columns("market_prices")
+    if "source" not in market_cols:
+        _execute(
+            f"ALTER TABLE market_prices ADD COLUMN source TEXT NOT NULL DEFAULT '{SOURCE_KUFAR}'"
+        )
+    sent_cols = _table_columns("sent_prices")
+    if "source" not in sent_cols:
+        _execute(
+            f"ALTER TABLE sent_prices ADD COLUMN source TEXT NOT NULL DEFAULT '{SOURCE_KUFAR}'"
+        )
     _executescript(
         """
         CREATE TABLE IF NOT EXISTS referrals (
@@ -567,6 +603,25 @@ def update_city(chat_id: int, city: str) -> str:
     return slug
 
 
+def update_country(chat_id: int, country: str) -> dict[str, str]:
+    c = normalize_country(country)
+    if c not in COUNTRIES:
+        cur = _execute("SELECT country, primary_source FROM users WHERE chat_id = ?", (chat_id,))
+        row = cur.fetchone()
+        if row is None:
+            return {"country": COUNTRY_BY, "primary_source": SOURCE_KUFAR}
+        return {
+            "country": normalize_country(row[0]),
+            "primary_source": normalize_primary_source(row[1]),
+        }
+    source = default_source_for_country(c)
+    _execute(
+        "UPDATE users SET country = ?, primary_source = ? WHERE chat_id = ?",
+        (c, source, chat_id),
+    )
+    return {"country": c, "primary_source": source}
+
+
 def update_geo(
     chat_id: int,
     rgn: int,
@@ -695,23 +750,30 @@ def process_referral_signup(new_chat_id: int, ref_code: str) -> int | None:
     return referrer_id
 
 
-def seen_links_for(chat_id: int, links: list[str]) -> set[str]:
+def seen_links_for(
+    chat_id: int,
+    links: list[str],
+    *,
+    source: str = SOURCE_KUFAR,
+) -> set[str]:
     """Ссылки из links, уже отмеченные как просмотренные для chat_id."""
     unique = [l for l in dict.fromkeys(links) if isinstance(l, str) and l.strip()]
     if not unique:
         return set()
+    src = normalize_primary_source(source)
     placeholders = ",".join("?" * len(unique))
     cur = _execute(
-        f"SELECT link FROM seen_ads WHERE chat_id = ? AND link IN ({placeholders})",
-        (chat_id, *unique),
+        f"SELECT link FROM seen_ads WHERE chat_id = ? AND source = ? AND link IN ({placeholders})",
+        (chat_id, src, *unique),
     )
     return {row[0] for row in cur.fetchall()}
 
 
-def mark_seen(chat_id: int, link: str) -> None:
+def mark_seen(chat_id: int, link: str, *, source: str = SOURCE_KUFAR) -> None:
+    src = normalize_primary_source(source)
     _execute(
-        "INSERT OR IGNORE INTO seen_ads (chat_id, link, seen_at) VALUES (?, ?, ?)",
-        (chat_id, link, int(time.time())),
+        "INSERT OR IGNORE INTO seen_ads (chat_id, link, seen_at, source) VALUES (?, ?, ?, ?)",
+        (chat_id, link, int(time.time()), src),
     )
 
 
@@ -751,14 +813,30 @@ def increment_sent(chat_id: int) -> None:
     )
 
 
-def save_market_prices(rows: list[tuple[str, str, int]]) -> None:
+def save_market_prices(rows: list[tuple[str, str, int] | tuple[str, str, int, str]]) -> None:
     if not rows:
         return
     now = int(time.time())
+    normalized: list[tuple[str, str, int, str, int]] = []
+    for row in rows:
+        if len(row) >= 4:
+            link, device_key, price, source = row[0], row[1], row[2], row[3]
+        else:
+            link, device_key, price = row[0], row[1], row[2]
+            source = SOURCE_KUFAR
+        normalized.append(
+            (
+                link,
+                device_key,
+                price,
+                normalize_primary_source(source),
+                now,
+            )
+        )
     _executemany(
-        "INSERT OR IGNORE INTO market_prices (link, device_key, price, sent_at) "
-        "VALUES (?, ?, ?, ?)",
-        [(link, device_key, price, now) for link, device_key, price in rows],
+        "INSERT OR IGNORE INTO market_prices (link, device_key, price, source, sent_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        normalized,
     )
 
 
@@ -789,11 +867,12 @@ def prune_unknown_market_prices() -> int:
     return cur.rowcount if cur.rowcount is not None else 0
 
 
-def avg_market_price(device_key: str) -> int | None:
+def avg_market_price(device_key: str, *, source: str = SOURCE_KUFAR) -> int | None:
     cutoff = _price_retention_cutoff()
+    src = normalize_primary_source(source)
     cur = _execute(
-        "SELECT AVG(price) FROM market_prices WHERE device_key = ? AND sent_at >= ?",
-        (device_key, cutoff),
+        "SELECT AVG(price) FROM market_prices WHERE device_key = ? AND source = ? AND sent_at >= ?",
+        (device_key, src, cutoff),
     )
     row = cur.fetchone()
     avg_value = row[0] if row else None

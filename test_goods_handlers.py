@@ -52,7 +52,7 @@ class HomeUiTests(unittest.TestCase):
         user = {"active": True, "product_category": "phones"}
         kb = home_keyboard(is_admin=False, user=user)
         labels = [[btn.text for btn in row] for row in kb.inline_keyboard]
-        self.assertIn(["💰 Цена", "📍 Город", "💾 Память"], labels)
+        self.assertIn(["🌍 Страна", "💰 Цена", "📍 Город", "💾 Память"], labels)
 
 
 class ModelLabelTests(unittest.TestCase):
