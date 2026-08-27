@@ -4,10 +4,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from avito_catalog import search_params_from_key
 from avito_fetch import (
     filter_ads_for_key,
     fetch_feed_ads_for_key,
     fetch_mock_ads_for_key,
+    fetch_search_ads_for_key,
     load_feed_snapshot,
     reset_feed_snapshot_for_tests,
 )
@@ -27,15 +29,50 @@ class AvitoAdapterTests(unittest.IsolatedAsyncioTestCase):
             ads = await adapter.fetch_for_key(key)
         self.assertEqual(ads, [])
 
-    async def test_fetch_raises_when_enabled_without_mock_or_feed(self) -> None:
+    async def test_fetch_raises_when_enabled_without_mock_search_or_feed(self) -> None:
         adapter = AvitoAdapter()
         key = (SOURCE_AVITO, "phones", "637640", "637640", ("iphone 15",), ("256",))
         with patch("marketplace.avito.AVITO_ENABLED", True):
             with patch("marketplace.avito.AVITO_DEV_MOCK", False):
-                with patch("marketplace.avito.AVITO_FEED_URL", ""):
-                    with patch("marketplace.avito.AVITO_FEED_FILE", ""):
-                        with self.assertRaises(NotImplementedError):
-                            await adapter.fetch_for_key(key)
+                with patch("marketplace.avito.AVITO_SEARCH_URL", ""):
+                    with patch("marketplace.avito.AVITO_FEED_URL", ""):
+                        with patch("marketplace.avito.AVITO_FEED_FILE", ""):
+                            with self.assertRaises(NotImplementedError):
+                                await adapter.fetch_for_key(key)
+
+    async def test_adapter_search_priority_over_feed(self) -> None:
+        adapter = AvitoAdapter()
+        key = (SOURCE_AVITO, "phones", "637640", "637640", ("iphone 15",), ("256",))
+        search_ad = {
+            "title": "Apple iPhone 15 256 GB",
+            "link": "https://www.avito.ru/moskva/telefony/search_priority",
+            "price": 70000,
+            "source": SOURCE_AVITO,
+        }
+        with patch("marketplace.avito.AVITO_ENABLED", True):
+            with patch("marketplace.avito.AVITO_DEV_MOCK", False):
+                with patch(
+                    "marketplace.avito.AVITO_SEARCH_URL",
+                    "https://example.com/search",
+                ):
+                    with patch(
+                        "marketplace.avito.AVITO_FEED_URL",
+                        "https://example.com/feed.json",
+                    ):
+                        with patch(
+                            "marketplace.avito.fetch_search_ads_for_key",
+                            new_callable=AsyncMock,
+                            return_value=[search_ad],
+                        ) as mock_search:
+                            with patch(
+                                "marketplace.avito.fetch_feed_ads_for_key",
+                                new_callable=AsyncMock,
+                            ) as mock_feed:
+                                ads = await adapter.fetch_for_key(key)
+        self.assertEqual(len(ads), 1)
+        mock_search.assert_awaited_once()
+        mock_feed.assert_not_awaited()
+        self.assertIn("search_priority", ads[0].get("link", ""))
 
     async def test_fetch_mock_returns_moscow_iphone(self) -> None:
         adapter = AvitoAdapter()
@@ -53,10 +90,11 @@ class AvitoAdapterTests(unittest.IsolatedAsyncioTestCase):
         reset_feed_snapshot_for_tests()
         with patch("marketplace.avito.AVITO_ENABLED", True):
             with patch("marketplace.avito.AVITO_DEV_MOCK", False):
-                with patch("marketplace.avito.AVITO_FEED_URL", ""):
-                    with patch("marketplace.avito.AVITO_FEED_FILE", str(_FEED_SAMPLE)):
-                        with patch("avito_fetch.AVITO_FEED_FILE", str(_FEED_SAMPLE)):
-                            ads = await adapter.fetch_for_key(key)
+                with patch("marketplace.avito.AVITO_SEARCH_URL", ""):
+                    with patch("marketplace.avito.AVITO_FEED_URL", ""):
+                        with patch("marketplace.avito.AVITO_FEED_FILE", str(_FEED_SAMPLE)):
+                            with patch("avito_fetch.AVITO_FEED_FILE", str(_FEED_SAMPLE)):
+                                ads = await adapter.fetch_for_key(key)
         self.assertEqual(len(ads), 1)
         self.assertIn("iphone 15", ads[0].get("title", "").lower())
 
@@ -115,6 +153,78 @@ class AvitoFeedFetchTests(unittest.IsolatedAsyncioTestCase):
             with patch("avito_fetch.AVITO_FEED_FILE", ""):
                 ads = await fetch_feed_ads_for_key(key, session)
         self.assertEqual(len(ads), 1)
+
+
+class AvitoCatalogTests(unittest.TestCase):
+    def test_search_params_from_key_moscow_phones(self) -> None:
+        key = (
+            SOURCE_AVITO,
+            "phones",
+            "637640",
+            "637640",
+            ("iphone 15", "iphone 15 pro"),
+            ("256",),
+        )
+        params = search_params_from_key(key)
+        self.assertEqual(
+            params,
+            {
+                "city_id": "637640",
+                "region_id": "637640",
+                "category": "phones",
+                "models": "iphone 15,iphone 15 pro",
+                "memory_gb": "256",
+            },
+        )
+
+    def test_search_params_from_key_laptops_no_memory(self) -> None:
+        key = (SOURCE_AVITO, "laptops", "637640", "637640", ("macbook air",), ())
+        params = search_params_from_key(key)
+        self.assertEqual(
+            params,
+            {
+                "city_id": "637640",
+                "region_id": "637640",
+                "category": "laptops",
+                "models": "macbook air",
+            },
+        )
+
+    def test_search_params_from_key_no_models(self) -> None:
+        key = (SOURCE_AVITO, "phones", "637640", "637640", (), ("256",))
+        self.assertIsNone(search_params_from_key(key))
+
+
+class AvitoSearchFetchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fetch_search_http(self) -> None:
+        reset_feed_snapshot_for_tests()
+        payload = json.loads(_FEED_SAMPLE.read_text(encoding="utf-8"))
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.json = AsyncMock(return_value={"ads": payload})
+        mock_resp.text = AsyncMock(return_value="")
+        mock_resp.headers = {}
+
+        mock_get = MagicMock()
+        mock_get.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_get.__aexit__ = AsyncMock(return_value=None)
+
+        session = MagicMock()
+        session.get = MagicMock(return_value=mock_get)
+
+        key = (SOURCE_AVITO, "phones", "637640", "637640", ("iphone 15",), ("256",))
+        with patch(
+            "avito_fetch.AVITO_SEARCH_URL",
+            "https://example.com/avito/search",
+        ):
+            ads = await fetch_search_ads_for_key(key, session)
+        self.assertEqual(len(ads), 2)
+        session.get.assert_called_once()
+        call_kwargs = session.get.call_args
+        self.assertEqual(call_kwargs[0][0], "https://example.com/avito/search")
+        self.assertEqual(call_kwargs[1]["params"]["city_id"], "637640")
+        self.assertEqual(call_kwargs[1]["params"]["models"], "iphone 15")
+        self.assertEqual(call_kwargs[1]["params"]["memory_gb"], "256")
 
 
 class AvitoRegistryTests(unittest.TestCase):

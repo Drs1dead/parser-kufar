@@ -8,6 +8,8 @@ poller.py            # Цикл: Kufar → фильтры → отправка
 user_matching.py     # Какие объявления подходят пользователю
 kufar_fetch.py       # Запросы к API Kufar
 kufar_catalog.py     # Фасеты cat/phm/ppm/ot/rgn/ar по категории
+avito_fetch.py       # Mock, search API и JSON feed Avito
+avito_catalog.py     # Query params для Avito collector (Фаза 4.2)
 kufar_geo.py         # Поиск населённых пунктов (geo/kufar_geo.json)
 product_catalog.py   # Категории и списки моделей
 filters.py           # Правила отбора объявлений
@@ -46,7 +48,7 @@ handlers/
 3. Для каждого due — `match_ads_for_user` по батчу его ключа. При catalog: без `smart_filtering` (кроме VIP «идеальные»), магазины (`company_ad`) и тонкий антихлам в заголовке; модель (и память у смартфонов) ещё раз проверяются локально.
 4. Новые объявления отправляются в Telegram (`formatter.format_ad`).
 
-Фасеты: [`kufar_catalog.py`](kufar_catalog.py). Нормализация и fetch Kufar — [`marketplace/kufar.py`](marketplace/kufar.py). Avito — [`marketplace/avito.py`](marketplace/avito.py) + [`avito_fetch.py`](avito_fetch.py): mock (`AVITO_DEV_MOCK`), JSON feed (`AVITO_FEED_URL`) или `fetch=[]` при `AVITO_ENABLED=false`. Старый текстовый fetch (`KUFAR_QUERIES`) — если `KUFAR_USE_CATALOG=false`.
+Фасеты Kufar: [`kufar_catalog.py`](kufar_catalog.py). Нормализация и fetch Kufar — [`marketplace/kufar.py`](marketplace/kufar.py). Avito — [`marketplace/avito.py`](marketplace/avito.py) + [`avito_fetch.py`](avito_fetch.py) + [`avito_catalog.py`](avito_catalog.py): mock (`AVITO_DEV_MOCK`), per-key search (`AVITO_SEARCH_URL`), JSON feed fallback (`AVITO_FEED_URL`) или `fetch=[]` при `AVITO_ENABLED=false`. Старый текстовый fetch (`KUFAR_QUERIES`) — если `KUFAR_USE_CATALOG=false`.
 
 ### Фаза 4 — Avito (отдельный трек)
 
@@ -58,7 +60,8 @@ flowchart LR
   AvitoDispatch --> AvitoAdapter
   AvitoAdapter -->|"AVITO_ENABLED=false"| Empty[fetch empty]
   AvitoAdapter -->|"DEV_MOCK"| MockFile[avito_mock_ads.json]
-  AvitoAdapter -->|"FEED_URL"| Feed[JSON feed snapshot]
+  AvitoAdapter -->|"SEARCH_URL"| Search[per-key search API]
+  AvitoAdapter -->|"FEED_URL fallback"| Feed[JSON feed snapshot]
 ```
 
 | Компонент | Kufar (BY) | Avito (RU) |
@@ -69,7 +72,7 @@ flowchart LR
 | Интервалы | `VIP_CHECK_INTERVAL`, `REGULAR_CHECK_INTERVAL` | `AVITO_VIP_CHECK_INTERVAL`, `AVITO_CHECK_INTERVAL` |
 | Feature gate | всегда (BY) | `AVITO_ENABLED` |
 
-Критерии легального канала данных — [`docs/AVITO_DATA_CHANNEL.md`](docs/AVITO_DATA_CHANNEL.md). Парсинг avito.ru в прод **не** входит в план.
+Критерии канала данных — [`docs/AVITO_DATA_CHANNEL.md`](docs/AVITO_DATA_CHANNEL.md). Парсинг avito.ru в боте **не** входит в план; collector — отдельный сервис.
 
 ### Профиль: страна и маркетплейс
 
@@ -78,7 +81,7 @@ flowchart LR
 | `users.country` | `by` / `ru` | Страна в UI |
 | `users.primary_source` | `kufar` / `avito` | Адаптер для fetch и `source` в seen/prices |
 
-Сейчас активен poll для `by` + `kufar`. Avito poll: `AVITO_ENABLED=true`, город `avito_city_id`, источник данных — `AVITO_FEED_URL` (прод) или `AVITO_DEV_MOCK` (тест). `seen_ads` и `market_prices` фильтруются по `source`.
+Сейчас активен poll для `by` + `kufar`. Avito poll: `AVITO_ENABLED=true`, город `avito_city_id`, источник данных — `AVITO_SEARCH_URL` (прод), `AVITO_FEED_URL` (fallback) или `AVITO_DEV_MOCK` (тест). `seen_ads` и `market_prices` фильтруются по `source`.
 
 ### VIP-потоки (`users.vip_feed_mode`)
 

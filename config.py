@@ -277,7 +277,10 @@ AVITO_DEV_MOCK = _avito_dev_mock in ("1", "true", "yes", "on")
 if AVITO_DEV_MOCK and not AVITO_ENABLED:
     AVITO_DEV_MOCK = False
 
-# Фаза 4.1: JSON feed партнёра (не парсинг avito.ru).
+# Фаза 4.2: per-key search API collector (primary prod path).
+AVITO_SEARCH_URL = os.getenv("AVITO_SEARCH_URL", "").strip()
+
+# Фаза 4.1: JSON feed партнёра (fallback если search URL пуст).
 AVITO_FEED_URL = os.getenv("AVITO_FEED_URL", "").strip()
 AVITO_FEED_AUTH = os.getenv("AVITO_FEED_AUTH", "").strip()
 AVITO_FEED_FILE = os.getenv("AVITO_FEED_FILE", "").strip()

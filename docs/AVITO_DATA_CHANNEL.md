@@ -1,10 +1,10 @@
-# Avito data channel — readiness criteria (Phase 4.1)
+# Avito data channel — readiness criteria (Phase 4.1 / 4.2)
 
 Phase 4.0 ships stubs only. Production fetch for Russia requires a **legal data channel** agreed in writing.
 
 ## Not acceptable for production
 
-- Scraping avito.ru HTML or unofficial mobile APIs
+- Scraping avito.ru HTML or unofficial mobile APIs **inside the bot**
 - Using Avito seller API to monitor the public marketplace catalog
 - Mixing Avito HTTP calls in the same batch/cache as Kufar
 
@@ -12,9 +12,12 @@ Phase 4.0 ships stubs only. Production fetch for Russia requires a **legal data 
 
 | Channel | Notes |
 |---------|--------|
-| Partner JSON/CSV feed | Periodic snapshot or push; preferred for v1 |
+| Self-hosted search API (Phase 4.2) | Per-key `GET` collector; primary prod path |
+| Partner JSON/CSV feed (Phase 4.1) | Snapshot fallback if search URL unset |
 | Licensed aggregator API | Contract, rate limits, SLA |
 | Official marketplace data product | If Avito or partner offers catalog export |
+
+Self-hosted collector (отдельный сервис) реализует `AVITO_SEARCH_URL` — бот только HTTP-клиент, без парсинга avito.ru.
 
 ## Minimum fields per listing
 
@@ -37,11 +40,12 @@ Phase 4.0 ships stubs only. Production fetch for Russia requires a **legal data 
 
 ## Enable checklist
 
-1. `AVITO_FEED_URL` (+ auth) configured on server
-2. `marketplace/avito.py` implements `fetch_for_key` against feed
-3. Staging: 1–2 users with `country=ru`, city set, `AVITO_ENABLED=true`
-4. Logs show separate `poll avito …` lines without Kufar errors
-5. Rollout to prod; BY users unchanged
+1. `AVITO_SEARCH_URL` (+ auth) configured on server — **primary** (Phase 4.2)
+2. Optional fallback: `AVITO_FEED_URL` if search URL unset (Phase 4.1)
+3. `marketplace/avito.py` implements `fetch_for_key` against search or feed
+4. Staging: 1–2 users with `country=ru`, city set, `AVITO_ENABLED=true`
+5. Logs show separate `poll avito …` lines without Kufar errors
+6. Rollout to prod; BY users unchanged
 
 ## Config (Phase 4.0)
 
@@ -61,18 +65,24 @@ Set `AVITO_ENABLED=true` only after the checklist below.
 
 | Вариант | Что нужно |
 |---------|-----------|
-| Партнёрский JSON feed | URL + токен от агрегатора/партнёра; поля как в «Minimum fields» |
-| Свой экспорт | Скрипт/сервис, который легально собирает данные и выдаёт JSON на `AVITO_FEED_URL` |
+| Self-hosted search API | `AVITO_SEARCH_URL` — collector с `GET /search?city_id=…` (Фаза 4.2) |
+| Партнёрский JSON feed | URL + токен; fallback если search URL пуст (Фаза 4.1) |
 | Локальный тест | `AVITO_DEV_MOCK=true` — без HTTP, файл `geo/avito_mock_ads.json` |
 
-Настройка prod feed:
+Настройка prod search (primary):
 
 ```env
 AVITO_ENABLED=true
 AVITO_DEV_MOCK=false
+AVITO_SEARCH_URL=https://your-collector.example/avito/search
+AVITO_FEED_AUTH=Bearer <token>   # Authorization для collector
+FEED_REFRESH_SECONDS=30            # TTL кэша fetch по FetchKey (Kufar + Avito)
+```
+
+Fallback snapshot feed (если `AVITO_SEARCH_URL` пуст):
+
+```env
 AVITO_FEED_URL=https://your-partner.example/avito-feed.json
-AVITO_FEED_AUTH=Bearer <token>   # если партнёр требует Authorization
-FEED_REFRESH_SECONDS=30            # общий TTL кэша Kufar + Avito feed
 ```
 
 Формат ответа feed — массив `[{...}]` или объект `{"ads": [...]}`. Пример записи: [`geo/avito_feed_sample.json`](geo/avito_feed_sample.json).
@@ -99,7 +109,45 @@ AVITO_DEV_MOCK=true
 
 При старте бота в логах: `AVITO_DEV_MOCK=true — … mock_ads.json`.
 
-## JSON feed format (Фаза 4.1)
+## Search API (Фаза 4.2)
+
+Per-key запрос, аналог Kufar `catalog_search_params` → search-api.
+
+**Endpoint:** `AVITO_SEARCH_URL` (полный URL handler, например `https://collector.example/avito/search`).
+
+**Method:** `GET`
+
+**Query params** (из `FetchKey` через [`avito_catalog.search_params_from_key`](avito_catalog.py)):
+
+| Param | Источник | Пример |
+|-------|----------|--------|
+| `city_id` | `geo_b` | `637640` |
+| `region_id` | `geo_a` (если задан) | `637640` |
+| `category` | категория | `phones` |
+| `models` | models tuple, comma-separated | `iphone 15,iphone 15 pro` |
+| `memory_gb` | memories (только phones) | `256` или `128,256` |
+
+**Response:** как feed 4.1 — массив `[{...}]` или `{"ads": [...]}`. Поля — «Minimum fields».
+
+**Auth:** `AVITO_FEED_AUTH` → `Authorization` header.
+
+**Retry:** 5xx/429/network — `AVITO_FEED_RETRIES`, `AVITO_FEED_RETRY_DELAY`.
+
+Collector отвечает **уже отфильтрованным** списком по ключу; бот только нормализует (`normalize_feed_ad`), без `filter_ads_for_key`.
+
+Кэш per `FetchKey` в poller (`FEED_REFRESH_SECONDS`) — один HTTP search на уникальный ключ за TTL.
+
+### Prod checklist (search)
+
+```env
+AVITO_ENABLED=true
+AVITO_DEV_MOCK=false
+AVITO_SEARCH_URL=https://collector.example/avito/search
+# AVITO_FEED_AUTH=Bearer <token>
+FEED_REFRESH_SECONDS=30
+```
+
+## JSON feed format (Фаза 4.1 — fallback)
 
 Поддерживаются два корневых формата:
 
@@ -111,21 +159,22 @@ AVITO_DEV_MOCK=true
 { "ads": [ { "id": "...", ... } ] }
 ```
 
-Поля записи — как в секции «Minimum fields» выше. Фильтрация по `FetchKey` на стороне бота (город, категория, модель в title, память).
+Поля записи — как в секции «Minimum fields» выше. При snapshot feed — фильтрация по `FetchKey` на стороне бота.
 
 Пример: [`geo/avito_feed_sample.json`](geo/avito_feed_sample.json).
 
-### Prod checklist
+### Prod checklist (feed fallback)
 
 ```env
 AVITO_ENABLED=true
 AVITO_DEV_MOCK=false
+# AVITO_SEARCH_URL=   # пуст — используется feed
 AVITO_FEED_URL=https://partner.example/avito-feed.json
 # AVITO_FEED_AUTH=Bearer <token>
 FEED_REFRESH_SECONDS=30
 ```
 
-- Один HTTP GET на снимок Avito feed раз в `FEED_REFRESH_SECONDS` (тот же TTL, что кэш fetch Kufar по ключу)
+- Один HTTP GET на снимок feed раз в `FEED_REFRESH_SECONDS`
 - Retry на 5xx/429/network (`AVITO_FEED_RETRIES`)
 - RU anti-junk: [`filters_avito.py`](filters_avito.py)
 

@@ -1,12 +1,23 @@
-"""Адаптер Avito — mock, JSON feed или stub (Фаза 4)."""
+"""Адаптер Avito — mock, search API, JSON feed или stub (Фаза 4)."""
 from __future__ import annotations
 
 import logging
 
 import aiohttp
 
-from avito_fetch import AVITO_HTTP_HEADERS, fetch_feed_ads_for_key, fetch_mock_ads_for_key
-from config import AVITO_DEV_MOCK, AVITO_ENABLED, AVITO_FEED_FILE, AVITO_FEED_URL
+from avito_fetch import (
+    AVITO_HTTP_HEADERS,
+    fetch_feed_ads_for_key,
+    fetch_mock_ads_for_key,
+    fetch_search_ads_for_key,
+)
+from config import (
+    AVITO_DEV_MOCK,
+    AVITO_ENABLED,
+    AVITO_FEED_FILE,
+    AVITO_FEED_URL,
+    AVITO_SEARCH_URL,
+)
 from marketplace.keys import FetchKey
 from marketplace.types import CURRENCY_RUB, NormalizedAd, SOURCE_AVITO
 
@@ -58,20 +69,32 @@ class AvitoAdapter:
             return []
         if AVITO_DEV_MOCK:
             return [NormalizedAd(ad) for ad in fetch_mock_ads_for_key(key)]
-        if AVITO_FEED_URL or AVITO_FEED_FILE:
-            async def _run(sess: aiohttp.ClientSession) -> list[NormalizedAd]:
-                ads = await fetch_feed_ads_for_key(key, sess)
+        if AVITO_SEARCH_URL:
+            async def _run_search(sess: aiohttp.ClientSession) -> list[NormalizedAd]:
+                ads = await fetch_search_ads_for_key(key, sess)
                 return [NormalizedAd(ad) for ad in ads]
 
             if session is not None:
-                return await _run(session)
+                return await _run_search(session)
             connector = aiohttp.TCPConnector(limit=4)
             async with aiohttp.ClientSession(
                 headers=AVITO_HTTP_HEADERS, connector=connector
             ) as own:
-                return await _run(own)
+                return await _run_search(own)
+        if AVITO_FEED_URL or AVITO_FEED_FILE:
+            async def _run_feed(sess: aiohttp.ClientSession) -> list[NormalizedAd]:
+                ads = await fetch_feed_ads_for_key(key, sess)
+                return [NormalizedAd(ad) for ad in ads]
+
+            if session is not None:
+                return await _run_feed(session)
+            connector = aiohttp.TCPConnector(limit=4)
+            async with aiohttp.ClientSession(
+                headers=AVITO_HTTP_HEADERS, connector=connector
+            ) as own:
+                return await _run_feed(own)
         raise NotImplementedError(
-            "Avito feed adapter is not configured — set AVITO_FEED_URL when channel is ready"
+            "Avito adapter is not configured — set AVITO_SEARCH_URL or AVITO_FEED_URL"
         )
 
 

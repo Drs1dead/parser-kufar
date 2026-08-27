@@ -9,6 +9,7 @@ from pathlib import Path
 
 import aiohttp
 
+from avito_catalog import search_params_from_key
 from config import (
     AVITO_FEED_AUTH,
     AVITO_FEED_FILE,
@@ -16,6 +17,7 @@ from config import (
     AVITO_FEED_RETRY_DELAY,
     AVITO_FEED_TIMEOUT_SECONDS,
     AVITO_FEED_URL,
+    AVITO_SEARCH_URL,
     FEED_REFRESH_SECONDS,
 )
 from filters import _normalize_memory_selection, memory_matches_ad
@@ -264,6 +266,100 @@ async def load_feed_snapshot(
 
     _feed_snapshot = (now, items)
     return items
+
+
+def _normalize_search_items(items: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for raw in items:
+        ad = normalize_feed_ad(raw)
+        if ad is not None:
+            out.append(ad)
+    return out
+
+
+async def _fetch_search_http(
+    session: aiohttp.ClientSession,
+    params: dict[str, str],
+) -> list[dict]:
+    if not AVITO_SEARCH_URL:
+        return []
+    headers = dict(_feed_auth_headers())
+    last_err: str | None = None
+    for attempt in range(1, AVITO_FEED_RETRIES + 1):
+        try:
+            async with session.get(
+                AVITO_SEARCH_URL,
+                params=params,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=AVITO_FEED_TIMEOUT_SECONDS),
+            ) as resp:
+                if resp.status >= 500 or resp.status == 429:
+                    body = (await resp.text())[:200]
+                    last_err = f"status={resp.status} {body}"
+                    log.warning(
+                        "avito search retry %s attempt=%s/%s params=%s",
+                        last_err,
+                        attempt,
+                        AVITO_FEED_RETRIES,
+                        params,
+                    )
+                    if resp.status == 429 and attempt < AVITO_FEED_RETRIES:
+                        retry_after = resp.headers.get("Retry-After")
+                        if retry_after:
+                            try:
+                                await asyncio.sleep(float(retry_after))
+                            except ValueError:
+                                pass
+                    if attempt < AVITO_FEED_RETRIES:
+                        await asyncio.sleep(AVITO_FEED_RETRY_DELAY * attempt)
+                    continue
+                if resp.status != 200:
+                    log.error(
+                        "avito search failed status=%s url=%s params=%s",
+                        resp.status,
+                        AVITO_SEARCH_URL,
+                        params,
+                    )
+                    return []
+                data = await resp.json(content_type=None)
+                items = _parse_feed_payload(data)
+                log.info(
+                    "avito search http loaded ads=%d url=%s params=%s",
+                    len(items),
+                    AVITO_SEARCH_URL,
+                    params,
+                )
+                return items
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as exc:
+            last_err = repr(exc)
+            log.warning(
+                "avito search network attempt=%s/%s err=%s params=%s",
+                attempt,
+                AVITO_FEED_RETRIES,
+                last_err,
+                params,
+            )
+        if attempt < AVITO_FEED_RETRIES:
+            await asyncio.sleep(AVITO_FEED_RETRY_DELAY * attempt)
+    if last_err:
+        log.error(
+            "avito search exhausted url=%s err=%s params=%s",
+            AVITO_SEARCH_URL,
+            last_err,
+            params,
+        )
+    return []
+
+
+async def fetch_search_ads_for_key(
+    key: FetchKey,
+    session: aiohttp.ClientSession,
+) -> list[dict]:
+    params = search_params_from_key(key)
+    if params is None:
+        return []
+    items = await _fetch_search_http(session, params)
+    return _normalize_search_items(items)
 
 
 async def fetch_feed_ads_for_key(
