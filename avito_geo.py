@@ -47,10 +47,6 @@ def resolve_geo_path() -> Path | None:
     return None
 
 
-def geo_data_available() -> bool:
-    return resolve_geo_path() is not None
-
-
 @lru_cache(maxsize=1)
 def _load_places() -> tuple[AvitoGeoPlace, ...]:
     path = resolve_geo_path()

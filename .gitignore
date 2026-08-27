@@ -10,3 +10,6 @@ data/*
 
 # Локальная пояснительная записка (не в репозитории)
 ПОЯСНЕНИЕ_КОДА.txt
+probe_out.txt
+debug-ca8c28.log
+debug-ca8c28.sentinel

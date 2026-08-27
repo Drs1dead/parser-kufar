@@ -18,7 +18,6 @@ from aiogram.types import InputMediaPhoto
 
 from config import (
     AVITO_CHECK_INTERVAL,
-    FEED_REFRESH_SECONDS,
     AVITO_VIP_CHECK_INTERVAL,
     CHECK_INTERVAL,
     FEED_REFRESH_SECONDS,
@@ -76,10 +75,20 @@ VIP_EXPIRED_MSG = (
     "Память сброшена на <b>64 GB</b>. "
     "Модели и лимит цены сохранены — при необходимости продлите VIP в меню."
 )
-FIRST_RUN_DIGEST_MSG = (
+FIRST_RUN_DIGEST_MSG_KUFAR = (
     "ℹ️ Показали первые <b>{n}</b> объявления. "
     "Остальные новые совпадения будут приходить по мере появления на Kufar."
 )
+FIRST_RUN_DIGEST_MSG_AVITO = (
+    "ℹ️ Показали первые <b>{n}</b> объявления. "
+    "Остальные новые совпадения будут приходить по мере появления на Avito."
+)
+
+
+def _first_run_digest_msg(user: dict) -> str:
+    if user_primary_source(user) == SOURCE_AVITO:
+        return FIRST_RUN_DIGEST_MSG_AVITO.format(n=FIRST_RUN_LIMIT)
+    return FIRST_RUN_DIGEST_MSG_KUFAR.format(n=FIRST_RUN_LIMIT)
 
 
 def _ingest_market_prices_from_ads(ads: list[dict]) -> None:
@@ -404,7 +413,7 @@ async def _process_user(
         try:
             await bot.send_message(
                 chat_id,
-                FIRST_RUN_DIGEST_MSG.format(n=FIRST_RUN_LIMIT),
+                _first_run_digest_msg(user),
                 parse_mode=ParseMode.HTML,
             )
         except Exception as exc:
@@ -422,6 +431,8 @@ async def _batch_enrich_ideal_descriptions(
     """Один HTTP-проход на link для VIP «идеальные» в batch dispatch."""
     by_link: dict[str, dict] = {}
     for key, group_users in groups.items():
+        if key[0] == SOURCE_AVITO:
+            continue
         ads = ads_by_key.get(key) or []
         if not ads:
             continue

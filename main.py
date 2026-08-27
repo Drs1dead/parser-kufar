@@ -12,7 +12,10 @@ from config import (
     ADMIN_IDS,
     AVITO_DEV_MOCK,
     AVITO_ENABLED,
+    AVITO_FEED_FILE,
     AVITO_FEED_URL,
+    AVITO_LIVE_ENABLED,
+    AVITO_SEARCH_URL,
     CHECK_INTERVAL,
     MARKET_DISCOUNT_THRESHOLD,
     REGULAR_CHECK_INTERVAL,
@@ -81,11 +84,17 @@ async def main() -> None:
         log.warning(
             "AVITO_DEV_MOCK=true — Avito poll uses geo/avito_mock_ads.json, not live data"
         )
+    elif AVITO_ENABLED and AVITO_SEARCH_URL:
+        log.info("avito external search url=%s", AVITO_SEARCH_URL)
     elif AVITO_ENABLED and AVITO_FEED_URL:
         log.info("avito feed configured url=%s", AVITO_FEED_URL)
+    elif AVITO_ENABLED and AVITO_LIVE_ENABLED:
+        log.info("avito live fetch enabled (built-in web API)")
+    elif AVITO_ENABLED and AVITO_FEED_FILE:
+        log.info("avito feed file=%s", AVITO_FEED_FILE)
     elif AVITO_ENABLED:
         log.warning(
-            "AVITO_ENABLED without AVITO_FEED_URL or AVITO_DEV_MOCK — poll will fail"
+            "AVITO_ENABLED but no data channel — set AVITO_LIVE_ENABLED or external URL"
         )
 
     poll_task = asyncio.create_task(poller(bot))

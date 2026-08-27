@@ -7,11 +7,13 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from avito_catalog import AVITO_QUICK_CITIES
 from config import (
     AVITO_ENABLED,
-    CURRENCY_SIGN,
     DEFAULT_MEMORY_VOLUMES,
+    format_price_for_country,
     MAX_PRICE_PRESETS,
+    MAX_PRICE_PRESETS_RUB,
     MEMORY_VOLUME_OPTIONS,
 )
 from kufar_catalog import QUICK_RGN_BUTTONS
@@ -33,7 +35,7 @@ from db import (
 )
 from marketplace.types import COUNTRY_BY, COUNTRY_RU, FLAG_BY, FLAG_RU, normalize_country
 from bot_ui import (
-    HELP_TEXT,
+    help_text,
     avito_city_keyboard,
     avito_city_pick_keyboard,
     avito_city_screen_text,
@@ -80,12 +82,20 @@ from logging_setup import log_exception
 log = logging.getLogger(__name__)
 router = Router()
 
+def _price_presets_for_user(user: dict | None) -> tuple[int, ...]:
+    if normalize_country((user or {}).get("country")) == COUNTRY_RU:
+        return MAX_PRICE_PRESETS_RUB
+    return MAX_PRICE_PRESETS
+
+
 def price_presets_keyboard(user: dict | None) -> InlineKeyboardMarkup:
     cur = user.get("max_price") if user else None
+    country = normalize_country((user or {}).get("country"))
+    presets = _price_presets_for_user(user)
     row: list[InlineKeyboardButton] = []
     rows: list[list[InlineKeyboardButton]] = []
-    for p in MAX_PRICE_PRESETS:
-        short = f"{p} {CURRENCY_SIGN}"
+    for p in presets:
+        short = format_price_for_country(p, country)
         label = f"✅ {short}" if cur is not None and int(cur) == int(p) else short
         row.append(InlineKeyboardButton(text=label, callback_data=f"nav:set:{p}"))
         if len(row) >= 3:
@@ -295,6 +305,23 @@ async def on_avito_city(cb: CallbackQuery, state: FSMContext) -> None:
         )
         return
 
+    if data.startswith("avito:quick:"):
+        raw_idx = data[12:]
+        if not raw_idx.isdigit() or int(raw_idx) >= len(AVITO_QUICK_CITIES):
+            await cb.answer("Неизвестный город", show_alert=True)
+            return
+        label, region_id, city_id = AVITO_QUICK_CITIES[int(raw_idx)]
+        geo = update_avito_geo(chat_id, region_id, city_id, label)
+        user.update(geo)
+        await state.clear()
+        await flush_screen(
+            cb,
+            home_text(user, is_new=False),
+            reply_markup=home_keyboard(is_admin=is_admin(actor_user_id(cb)), user=user),
+            notice=f"📍 {label}",
+        )
+        return
+
     if data.startswith("avito:pick:"):
         raw = data[11:]
         if not raw.isdigit():
@@ -373,6 +400,14 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
             if not (user.get("keywords") or []):
                 await cb.answer(
                     "Сначала выберите модели в «Товары» — иначе искать нечего.",
+                    show_alert=True,
+                )
+                return
+            if normalize_country(user.get("country")) == COUNTRY_RU and not (
+                user.get("avito_city_id")
+            ):
+                await cb.answer(
+                    "Сначала выберите город Avito (кнопка «Город»).",
                     show_alert=True,
                 )
                 return
@@ -501,7 +536,7 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
             await state.set_state(CustomPriceState.waiting_price)
             await flush_screen(
                 cb,
-                custom_price_prompt_text(),
+                custom_price_prompt_text(user),
                 reply_markup=back_keyboard(),
             )
             return
@@ -538,7 +573,7 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
         if data == "nav:help":
             await flush_screen(
                 cb,
-                HELP_TEXT,
+                help_text(user),
                 reply_markup=help_keyboard(),
             )
             return
@@ -721,9 +756,11 @@ async def on_custom_price_text(msg: Message, state: FSMContext) -> None:
         )
         return
     price = int(raw)
+    country = normalize_country(user.get("country"))
+    sign = "₽" if country == COUNTRY_RU else "Br"
     if not 1 <= price <= 10_000_000:
         await msg.answer(
-            f"Цена должна быть от 1 до 10 000 000 {CURRENCY_SIGN}. Введите значение заново.",
+            f"Цена должна быть от 1 до 10 000 000 {sign}. Введите значение заново.",
             parse_mode=ParseMode.HTML,
         )
         return

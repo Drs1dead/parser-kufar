@@ -1,4 +1,4 @@
-"""Адаптер Avito — mock, search API, JSON feed или stub (Фаза 4)."""
+"""Адаптер Avito — mock, search API, live fetch, JSON feed."""
 from __future__ import annotations
 
 import logging
@@ -11,11 +11,13 @@ from avito_fetch import (
     fetch_mock_ads_for_key,
     fetch_search_ads_for_key,
 )
+from avito_live import fetch_live_ads_for_key
 from config import (
     AVITO_DEV_MOCK,
     AVITO_ENABLED,
     AVITO_FEED_FILE,
     AVITO_FEED_URL,
+    AVITO_LIVE_ENABLED,
     AVITO_SEARCH_URL,
 )
 from marketplace.keys import FetchKey
@@ -81,6 +83,18 @@ class AvitoAdapter:
                 headers=AVITO_HTTP_HEADERS, connector=connector
             ) as own:
                 return await _run_search(own)
+        if AVITO_LIVE_ENABLED:
+            async def _run_live(sess: aiohttp.ClientSession) -> list[NormalizedAd]:
+                ads = await fetch_live_ads_for_key(key, sess)
+                return [NormalizedAd(ad) for ad in ads]
+
+            if session is not None:
+                return await _run_live(session)
+            connector = aiohttp.TCPConnector(limit=4)
+            async with aiohttp.ClientSession(
+                headers=AVITO_HTTP_HEADERS, connector=connector
+            ) as own:
+                return await _run_live(own)
         if AVITO_FEED_URL or AVITO_FEED_FILE:
             async def _run_feed(sess: aiohttp.ClientSession) -> list[NormalizedAd]:
                 ads = await fetch_feed_ads_for_key(key, sess)
@@ -94,7 +108,7 @@ class AvitoAdapter:
             ) as own:
                 return await _run_feed(own)
         raise NotImplementedError(
-            "Avito adapter is not configured — set AVITO_SEARCH_URL or AVITO_FEED_URL"
+            "Avito adapter is not configured — enable AVITO_LIVE_ENABLED or set external URL"
         )
 
 

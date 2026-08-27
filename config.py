@@ -108,6 +108,29 @@ MAX_PRICE_PRESETS: tuple[int, ...] = tuple(
     if x.strip().isdigit()
 ) or (300, 500, 800, 1000, 1500, 2000, 3000, 5000)
 
+MAX_PRICE_PRESETS_RUB: tuple[int, ...] = tuple(
+    int(x.strip())
+    for x in os.getenv(
+        "MAX_PRICE_PRESETS_RUB",
+        "30000,50000,70000,100000,150000,200000,300000,500000",
+    ).split(",")
+    if x.strip().isdigit()
+) or (30000, 50000, 70000, 100000, 150000, 200000, 300000, 500000)
+
+
+def format_price_for_country(
+    amount: int | float | None,
+    country: str | None = None,
+) -> str:
+    """Цена для UI: BY — Br, RU — ₽."""
+    if amount is None:
+        return "не указана"
+    n = int(amount)
+    text = f"{n:,}".replace(",", " ")
+    if str(country or "").strip().lower() == "ru":
+        return f"{text} ₽"
+    return f"{text} {CURRENCY_SIGN}"
+
 # Стоп-слова по смыслу объявления: проверяются только в названии (subject),
 # чтобы «чехол в подарок» в описании не отсекало продажу телефона.
 DEFAULT_EXCLUDE_TERMS: tuple[str, ...] = (
@@ -277,10 +300,16 @@ AVITO_DEV_MOCK = _avito_dev_mock in ("1", "true", "yes", "on")
 if AVITO_DEV_MOCK and not AVITO_ENABLED:
     AVITO_DEV_MOCK = False
 
-# Фаза 4.2: per-key search API collector (primary prod path).
+# Фаза 4.2: per-key search API collector (optional override).
 AVITO_SEARCH_URL = os.getenv("AVITO_SEARCH_URL", "").strip()
 
-# Фаза 4.1: JSON feed партнёра (fallback если search URL пуст).
+_avito_live_env = os.getenv("AVITO_LIVE_ENABLED", "").strip().lower()
+if _avito_live_env:
+    AVITO_LIVE_ENABLED = _avito_live_env in ("1", "true", "yes", "on")
+else:
+    AVITO_LIVE_ENABLED = AVITO_ENABLED
+
+# Фаза 4.1: JSON feed партнёра (fallback если search/live пуст).
 AVITO_FEED_URL = os.getenv("AVITO_FEED_URL", "").strip()
 AVITO_FEED_AUTH = os.getenv("AVITO_FEED_AUTH", "").strip()
 AVITO_FEED_FILE = os.getenv("AVITO_FEED_FILE", "").strip()

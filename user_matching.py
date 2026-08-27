@@ -7,7 +7,7 @@ from config import FILTER_DEBUG_LOG, KUFAR_USE_CATALOG, MARKET_DISCOUNT_THRESHOL
 from db import avg_market_price
 from marketplace.keys import user_primary_source
 from marketplace.types import SOURCE_AVITO
-from filters_avito import AVITO_THIN_JUNK_STEMS
+from filters_avito import avito_thin_junk_reason
 from filters import (
     ad_device_key,
     exchange_reject_reason,
@@ -52,8 +52,14 @@ def _memory_filter_for(user: dict) -> bool:
 
 def _thin_junk_stems_for(user: dict) -> tuple[str, ...]:
     if _is_avito_user(user):
-        return AVITO_THIN_JUNK_STEMS
+        return ()
     return ()
+
+
+def _avito_junk_reject(ad: dict, user: dict) -> bool:
+    if not _is_avito_user(user):
+        return False
+    return avito_thin_junk_reason(ad) is not None
 
 
 def geo_location_matches(ad: dict, user: dict) -> bool:
@@ -104,6 +110,8 @@ def _passes_base(ad: dict, user: dict, *, max_price: int, skip_new_phone: bool =
         thin_junk=catalog_style,
         extra_headline_stems=_thin_junk_stems_for(user),
     ):
+        return False
+    if _avito_junk_reject(ad, user):
         return False
     return geo_location_matches(ad, user)
 

@@ -40,11 +40,6 @@ def user_is_avito_pollable(user: dict | None) -> bool:
     return bool(city_id)
 
 
-def user_is_pollable(user: dict | None) -> bool:
-    """Обратная совместимость: только Kufar BY."""
-    return user_is_kufar_pollable(user)
-
-
 def _kufar_geo_key(user: dict | None) -> tuple[str, str]:
     rgn = user_rgn(user)
     ar = user_ar(user)

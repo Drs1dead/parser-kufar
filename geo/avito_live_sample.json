@@ -1,0 +1,25 @@
+{
+  "ads": [
+    {
+      "id": 900001,
+      "title": "Apple iPhone 15 256 GB",
+      "url": "/moskva/telefony/apple_iphone_15_256_live",
+      "priceDetailed": { "value": 75500 },
+      "description": "Отличное состояние. АКБ 91%.",
+      "images": [{ "636x476": "https://example.com/iphone15.jpg" }],
+      "geo": { "formattedAddress": "Москва" }
+    },
+    {
+      "id": 900002,
+      "title": "Samsung Galaxy S24 256 GB",
+      "url": "/moskva/telefony/galaxy_s24_live",
+      "priceDetailed": { "value": 69000 },
+      "description": "Полный комплект.",
+      "images": [],
+      "geo": { "formattedAddress": "Москва" }
+    }
+  ],
+  "pagination": { "hasNextPage": false },
+  "total": 2,
+  "page_type": "catalog"
+}

@@ -3,16 +3,16 @@ import time
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from avito_catalog import AVITO_QUICK_CITIES
 from config import (
     AVITO_ENABLED,
-    CURRENCY_SIGN,
     DEFAULT_MEMORY_VOLUMES,
     MEMORY_VOLUME_OPTIONS,
     REFERRAL_VIP_DAYS_PER_FRIEND,
     VIP_PRICE_USD,
     format_local_datetime,
     format_memory_volume,
-    format_price,
+    format_price_for_country,
 )
 from db import count_referrals, ensure_referral_code
 from kufar_catalog import QUICK_RGN_BUTTONS, user_city_label
@@ -22,8 +22,6 @@ from marketplace.types import (
     COUNTRY_RU,
     FLAG_BY,
     FLAG_RU,
-    SOURCE_AVITO,
-    SOURCE_KUFAR,
     normalize_country,
 )
 from product_catalog import (
@@ -39,13 +37,28 @@ PRIVACY_POLICY_URL = "https://telegra.ph/POLITIKA-KONFIDENCIALNOSTI-08-12-99"
 TERMS_OF_SERVICE_URL = "https://telegra.ph/PUBLICHNAYA-OFERTA-08-12-15"
 SUPPORT_URL = "https://t.me/kufiBY"
 
-HELP_TEXT = (
+HELP_TEXT_BY = (
     "<b>Помощь</b>\n\n"
     "Kufi ищет технику на <b>Kufar.by</b> и присылает совпадения. "
-    f"Цены — в <b>{CURRENCY_SIGN}</b>.\n\n"
+    "Цены — в <b>Br</b>.\n\n"
     "Настройте <b>Товары</b>, лимит и город, затем включите уведомления.\n\n"
     "Новости и документы — кнопки ниже."
 )
+
+HELP_TEXT_RU = (
+    "<b>Помощь</b>\n\n"
+    "Kufi ищет технику на <b>Avito</b> (Россия) и присылает совпадения. "
+    "Цены — в <b>₽</b>.\n\n"
+    "Выберите <b>Город</b>, модели в <b>Товары</b>, лимит цены — затем включите уведомления.\n\n"
+    "Новости и документы — кнопки ниже."
+)
+
+
+def help_text(user: dict | None = None) -> str:
+    country = normalize_country((user or {}).get("country"))
+    if country == COUNTRY_RU:
+        return HELP_TEXT_RU
+    return HELP_TEXT_BY
 
 
 def _kw_count(user: dict | None) -> int:
@@ -146,7 +159,7 @@ def home_text(user: dict | None, *, is_new: bool) -> str:
         geo = user_avito_city_label(user)
     else:
         geo = user_city_label(user)
-    detail = f"до {format_price(max_p)} · {geo}"
+    detail = f"до {format_price_for_country(max_p, country)} · {geo}"
     if is_phones_category(user.get("product_category")):
         mem = (user.get("memory_volumes") or list(DEFAULT_MEMORY_VOLUMES))
         mem_txt = ", ".join(format_memory_volume(v, short=True) for v in mem)
@@ -397,17 +410,32 @@ def avito_city_pick_keyboard(options: list[dict]) -> InlineKeyboardMarkup:
 
 
 def avito_city_keyboard(user: dict | None) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="⌨️ Ввести город",
-                    callback_data="avito:city:typed",
-                )
-            ],
-            back_row(),
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    current_city = str((user or {}).get("avito_city_id") or "").strip()
+    for idx, (label, region_id, city_id) in enumerate(AVITO_QUICK_CITIES):
+        mark = " ✅" if current_city and current_city == city_id else ""
+        row.append(
+            InlineKeyboardButton(
+                text=f"{label}{mark}",
+                callback_data=f"avito:quick:{idx}",
+            )
+        )
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⌨️ Ввести город",
+                callback_data="avito:city:typed",
+            )
         ]
     )
+    rows.append(back_row())
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def city_screen_text(user: dict | None) -> str:
@@ -479,7 +507,12 @@ def city_keyboard(user: dict | None) -> InlineKeyboardMarkup:
 
 def price_screen_text(user: dict | None) -> str:
     cur = user.get("max_price") if user else None
-    cur_txt = f"<b>{format_price(cur)}</b>" if cur is not None else "не задана"
+    country = normalize_country((user or {}).get("country"))
+    cur_txt = (
+        f"<b>{format_price_for_country(cur, country)}</b>"
+        if cur is not None
+        else "не задана"
+    )
     extra = ""
     if user and user.get("role") == "vip":
         extra = "\n\nСвоя сумма — кнопка ниже."
@@ -503,9 +536,12 @@ def promo_back_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def custom_price_prompt_text() -> str:
+def custom_price_prompt_text(user: dict | None = None) -> str:
+    country = normalize_country((user or {}).get("country"))
+    sign = "₽" if country == COUNTRY_RU else "Br"
+    example = "120000" if country == COUNTRY_RU else "1200"
     return (
         "🎯 <b>Своя цена</b> (VIP)\n\n"
-        f"Введите максимум в {CURRENCY_SIGN} — одним числом.\n"
-        "Например: <code>1200</code>"
+        f"Введите максимум в {sign} — одним числом.\n"
+        f"Например: <code>{example}</code>"
     )

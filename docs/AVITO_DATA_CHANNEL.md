@@ -1,23 +1,21 @@
-# Avito data channel — readiness criteria (Phase 4.1 / 4.2)
+# Avito data channel
 
-Phase 4.0 ships stubs only. Production fetch for Russia requires a **legal data channel** agreed in writing.
+## Default prod path (zero-config)
 
-## Not acceptable for production
+```env
+AVITO_ENABLED=true
+```
 
-- Scraping avito.ru HTML or unofficial mobile APIs **inside the bot**
-- Using Avito seller API to monitor the public marketplace catalog
-- Mixing Avito HTTP calls in the same batch/cache as Kufar
+Built-in live fetch (`avito_live.py` → `https://www.avito.ru/web/1/main/items`) runs automatically when `AVITO_LIVE_ENABLED` is true (default with `AVITO_ENABLED`). No `AVITO_SEARCH_URL`, feed URL, or mock required.
 
-## Acceptable channels
+Optional overrides:
 
-| Channel | Notes |
-|---------|--------|
-| Self-hosted search API (Phase 4.2) | Per-key `GET` collector; primary prod path |
-| Partner JSON/CSV feed (Phase 4.1) | Snapshot fallback if search URL unset |
-| Licensed aggregator API | Contract, rate limits, SLA |
-| Official marketplace data product | If Avito or partner offers catalog export |
-
-Self-hosted collector (отдельный сервис) реализует `AVITO_SEARCH_URL` — бот только HTTP-клиент, без парсинга avito.ru.
+| Env | Role |
+|-----|------|
+| `AVITO_DEV_MOCK=true` | Local smoke with `geo/avito_mock_ads.json` |
+| `AVITO_SEARCH_URL` | External per-key collector (overrides live) |
+| `AVITO_FEED_URL` | Snapshot JSON fallback |
+| `AVITO_LIVE_ENABLED=false` | Disable built-in live |
 
 ## Minimum fields per listing
 
@@ -40,12 +38,10 @@ Self-hosted collector (отдельный сервис) реализует `AVIT
 
 ## Enable checklist
 
-1. `AVITO_SEARCH_URL` (+ auth) configured on server — **primary** (Phase 4.2)
-2. Optional fallback: `AVITO_FEED_URL` if search URL unset (Phase 4.1)
-3. `marketplace/avito.py` implements `fetch_for_key` against search or feed
-4. Staging: 1–2 users with `country=ru`, city set, `AVITO_ENABLED=true`
-5. Logs show separate `poll avito …` lines without Kufar errors
-6. Rollout to prod; BY users unchanged
+1. `AVITO_ENABLED=true` in `.env`, restart bot
+2. Staging: RU user with city, models, notifications on
+3. Logs: `avito live loaded ads=…`
+4. Optional: `AVITO_SEARCH_URL` or `AVITO_FEED_URL` instead of live
 
 ## Config (Phase 4.0)
 
@@ -65,24 +61,17 @@ Set `AVITO_ENABLED=true` only after the checklist below.
 
 | Вариант | Что нужно |
 |---------|-----------|
-| Self-hosted search API | `AVITO_SEARCH_URL` — collector с `GET /search?city_id=…` (Фаза 4.2) |
-| Партнёрский JSON feed | URL + токен; fallback если search URL пуст (Фаза 4.1) |
-| Локальный тест | `AVITO_DEV_MOCK=true` — без HTTP, файл `geo/avito_mock_ads.json` |
-
-Настройка prod search (primary):
+| **Built-in live** (default) | `AVITO_ENABLED=true` |
+| External search API | `AVITO_SEARCH_URL` |
+| Партнёрский JSON feed | `AVITO_FEED_URL` |
+| Локальный тест | `AVITO_DEV_MOCK=true` |
 
 ```env
 AVITO_ENABLED=true
-AVITO_DEV_MOCK=false
-AVITO_SEARCH_URL=https://your-collector.example/avito/search
-AVITO_FEED_AUTH=Bearer <token>   # Authorization для collector
-FEED_REFRESH_SECONDS=30            # TTL кэша fetch по FetchKey (Kufar + Avito)
-```
-
-Fallback snapshot feed (если `AVITO_SEARCH_URL` пуст):
-
-```env
-AVITO_FEED_URL=https://your-partner.example/avito-feed.json
+# AVITO_LIVE_ENABLED=false   # отключить live, использовать external URL
+# AVITO_SEARCH_URL=...
+# AVITO_FEED_URL=...
+FEED_REFRESH_SECONDS=30
 ```
 
 Формат ответа feed — массив `[{...}]` или объект `{"ads": [...]}`. Пример записи: [`geo/avito_feed_sample.json`](geo/avito_feed_sample.json).

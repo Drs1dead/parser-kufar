@@ -4,7 +4,6 @@ from marketplace.keys import (
     group_users_by_fetch_key,
     user_is_avito_pollable,
     user_is_kufar_pollable,
-    user_is_pollable,
 )
 from marketplace.registry import adapter_for_user, get_adapter
 from marketplace.types import (
@@ -34,5 +33,4 @@ __all__ = [
     "normalize_primary_source",
     "user_is_avito_pollable",
     "user_is_kufar_pollable",
-    "user_is_pollable",
 ]
