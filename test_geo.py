@@ -15,8 +15,15 @@ class GeoSearchTests(unittest.TestCase):
 
     def test_bobruisk(self) -> None:
         hits = search_places("бобруйск")
-        self.assertTrue(hits)
+        self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0].label, "Бобруйск")
+        self.assertEqual(hits[0].ar, 12)
+
+    def test_minsk_shortcut(self) -> None:
+        hits = search_places("минск")
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].rgn, 7)
+        self.assertIsNone(hits[0].ar)
 
 
 class GeoLocationFilterTests(unittest.TestCase):

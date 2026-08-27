@@ -3,6 +3,7 @@ import logging
 
 from aiogram import F, Router
 from aiogram.enums import ParseMode
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
@@ -13,7 +14,7 @@ from config import (
     MEMORY_VOLUME_OPTIONS,
 )
 from kufar_catalog import QUICK_RGN_BUTTONS
-from kufar_geo import search_places
+from kufar_geo import geo_data_available, search_places
 from product_catalog import is_phones_category
 from db import (
     get_user,
@@ -349,6 +350,7 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
 
         if data == "nav:city:typed":
             await state.set_state(CityInputState.waiting_text)
+            await state.update_data(city_typing=True)
             await flush_screen(
                 cb,
                 city_typed_prompt_text(),
@@ -435,70 +437,104 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
         await safe_cb_answer(cb, "Не удалось обновить меню", show_alert=True)
 
 
-@router.message(CityInputState.waiting_text, F.text, ~F.text.startswith("/"))
+@router.message(
+    StateFilter(
+        CityInputState.waiting_text,
+        CustomPriceState.waiting_price,
+        PromoCodeState.waiting_code,
+    ),
+    F.text,
+    ~F.text.startswith("/"),
+)
+async def on_nav_fsm_text(msg: Message, state: FSMContext) -> None:
+    st = await state.get_state()
+    if st == CityInputState.waiting_text.state:
+        await on_city_text(msg, state)
+    elif st == CustomPriceState.waiting_price.state:
+        await on_custom_price_text(msg, state)
+    elif st == PromoCodeState.waiting_code.state:
+        await on_promo_code_text(msg, state)
+
+
 async def on_city_text(msg: Message, state: FSMContext) -> None:
     chat_id = msg.chat.id
-    user = load_user_from_message(msg)
-    if user is None:
-        await state.clear()
-        await msg.answer("Сначала нажми <code>/start</code>.", parse_mode=ParseMode.HTML)
-        return
+    try:
+        user = load_user_from_message(msg)
+        if user is None:
+            await state.clear()
+            await msg.answer("Сначала нажми <code>/start</code>.", parse_mode=ParseMode.HTML)
+            return
 
-    text = (msg.text or "").strip()
-    if len(text) < 2:
-        await msg.answer(
-            "Введите не менее 2 символов, например <code>Брест</code>.",
-            parse_mode=ParseMode.HTML,
-        )
-        return
+        if not geo_data_available():
+            log.error("city input: geo file missing for chat_id=%s", chat_id)
+            await msg.answer(
+                "Карта городов на сервере не найдена. Попробуйте кнопки областей ниже "
+                "или напишите админу.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=city_keyboard(user),
+            )
+            return
 
-    matches = search_places(text, limit=5)
-    if not matches:
+        text = (msg.text or "").strip()
+        if len(text) < 2:
+            await msg.answer(
+                "Введите не менее 2 символов, например <code>Брест</code>.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        matches = search_places(text, limit=5)
+        if not matches:
+            await msg.answer(
+                "Ничего не найдено. Попробуйте другое название или выберите область в меню.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=city_keyboard(user),
+            )
+            return
+
+        if len(matches) == 1:
+            place = matches[0]
+            geo = update_geo(chat_id, place.rgn, place.ar, place.label)
+            user.update(geo)
+            await state.clear()
+            uid = actor_user_id(msg)
+            await msg.answer(
+                f"📍 Город: <b>{place.label}</b>\n\n{home_text(user, is_new=False)}",
+                reply_markup=home_keyboard(is_admin=is_admin(uid), user=user),
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        if len(matches) <= 3:
+            options = [
+                {
+                    "label": f"{p.label} ({p.region_label})",
+                    "rgn": p.rgn,
+                    "ar": p.ar,
+                }
+                for p in matches[:3]
+            ]
+            await state.update_data(city_options=options)
+            await msg.answer(
+                "Найдено несколько вариантов — выберите:",
+                reply_markup=city_pick_keyboard(options),
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
         await msg.answer(
-            "Ничего не найдено. Попробуйте другое название или выберите область в меню.",
+            "Слишком много совпадений — уточните название.",
             parse_mode=ParseMode.HTML,
             reply_markup=city_keyboard(user),
         )
-        return
-
-    if len(matches) == 1:
-        place = matches[0]
-        geo = update_geo(chat_id, place.rgn, place.ar, place.label)
-        user.update(geo)
-        await state.clear()
-        uid = actor_user_id(msg)
+    except Exception:
+        log_exception(log, "city text failed chat_id=%s", chat_id)
         await msg.answer(
-            home_text(user, is_new=False),
-            reply_markup=home_keyboard(is_admin=is_admin(uid), user=user),
+            "Не удалось сохранить город. Попробуйте кнопку области или /start.",
             parse_mode=ParseMode.HTML,
         )
-        return
-
-    if len(matches) <= 3:
-        options = [
-            {
-                "label": f"{p.label} ({p.region_label})",
-                "rgn": p.rgn,
-                "ar": p.ar,
-            }
-            for p in matches[:3]
-        ]
-        await state.update_data(city_options=options)
-        await msg.answer(
-            "Найдено несколько вариантов — выберите:",
-            reply_markup=city_pick_keyboard(options),
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    await msg.answer(
-        "Слишком много совпадений — уточните название.",
-        parse_mode=ParseMode.HTML,
-        reply_markup=city_keyboard(user),
-    )
 
 
-@router.message(CustomPriceState.waiting_price, F.text, ~F.text.startswith("/"))
 async def on_custom_price_text(msg: Message, state: FSMContext) -> None:
     chat_id = msg.chat.id
     user = load_user_from_message(msg)
@@ -535,7 +571,6 @@ async def on_custom_price_text(msg: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(PromoCodeState.waiting_code, F.text, ~F.text.startswith("/"))
 async def on_promo_code_text(msg: Message, state: FSMContext) -> None:
     chat_id = msg.chat.id
     user = load_user_from_message(msg)

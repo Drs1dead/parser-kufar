@@ -164,6 +164,19 @@ async def _notify_vip_expired(bot: Bot, chat_ids: list[int]) -> None:
             log_exception(log, "vip expired notify failed chat_id=%s: %s", chat_id, exc)
 
 
+def _is_unreachable_chat(exc: TelegramBadRequest) -> bool:
+    msg = str(exc).lower()
+    return any(
+        token in msg
+        for token in (
+            "chat not found",
+            "user is deactivated",
+            "peer_id_invalid",
+            "bot was blocked",
+        )
+    )
+
+
 async def _send_ad(
     bot: Bot,
     chat_id: int,
@@ -224,6 +237,10 @@ async def _send_ad(
         set_active(chat_id, False)
         return False, True
     except TelegramBadRequest as exc:
+        if _is_unreachable_chat(exc):
+            log.info("user unreachable chat_id=%s — subscription off", chat_id)
+            set_active(chat_id, False)
+            return False, True
         log.warning("send bad_request chat_id=%s: %s", chat_id, exc)
         if photos and include_photos:
             try:

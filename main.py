@@ -41,6 +41,13 @@ async def main() -> None:
 
     init_db()
 
+    from kufar_geo import geo_data_available, GEO_PATH
+
+    if not geo_data_available():
+        log.error("data/kufar_geo.json missing at %s — city text input disabled", GEO_PATH)
+    else:
+        log.info("geo map loaded path=%s", GEO_PATH)
+
     bot = Bot(
         token=TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
