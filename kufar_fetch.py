@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any, Optional
 
 import aiohttp
@@ -37,6 +38,8 @@ NEXT_DATA_RE = re.compile(
     r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>',
     re.DOTALL,
 )
+DESCRIPTION_CACHE_TTL_SECONDS = 3600
+_description_cache: dict[str, tuple[float, str]] = {}
 
 
 def _param(params: list[dict], name: str) -> Optional[dict]:
@@ -299,7 +302,23 @@ async def _enrich_description(
     session: aiohttp.ClientSession, ad: dict, sem: asyncio.Semaphore
 ) -> None:
     async with sem:
-        ad["description"] = await _fetch_description(session, ad["link"])
+        link = ad["link"]
+        body = await _fetch_description(session, link)
+        _description_cache[link] = (time.time(), body)
+        ad["description"] = body
+
+
+def _apply_cached_description(ad: dict) -> bool:
+    link = ad.get("link")
+    if not link or (ad.get("description") or "").strip():
+        return False
+    cached = _description_cache.get(link)
+    if not cached:
+        return False
+    if time.time() - cached[0] >= DESCRIPTION_CACHE_TTL_SECONDS:
+        return False
+    ad["description"] = cached[1]
+    return True
 
 
 def _normalize_raw_ads(raw_ads: list[dict]) -> list[dict]:
@@ -317,17 +336,34 @@ def _normalize_raw_ads(raw_ads: list[dict]) -> list[dict]:
     return ads
 
 
-async def enrich_ads_descriptions(ads: list[dict], *, concurrency: int = 5) -> None:
-    """Параллельно подгружает описания для списка объявлений."""
-    need = [a for a in ads if not (a.get("description") or "").strip() and a.get("link")]
+async def enrich_ads_descriptions(
+    ads: list[dict],
+    *,
+    session: aiohttp.ClientSession | None = None,
+    concurrency: int = 5,
+) -> None:
+    """Параллельно подгружает описания; кэш по link снижает дубли HTTP."""
+    need: list[dict] = []
+    for ad in ads:
+        if _apply_cached_description(ad):
+            continue
+        if not (ad.get("description") or "").strip() and ad.get("link"):
+            need.append(ad)
     if not need:
+        return
+
+    async def _run(sess: aiohttp.ClientSession) -> None:
+        sem = asyncio.Semaphore(max(1, concurrency))
+        await asyncio.gather(*(_enrich_description(sess, ad, sem) for ad in need))
+
+    if session is not None:
+        await _run(session)
         return
     connector = aiohttp.TCPConnector(limit=8)
     async with aiohttp.ClientSession(
         headers=DEFAULT_HEADERS, connector=connector
-    ) as session:
-        sem = asyncio.Semaphore(max(1, concurrency))
-        await asyncio.gather(*(_enrich_description(session, ad, sem) for ad in need))
+    ) as own:
+        await _run(own)
 
 
 async def fetch_ads() -> list[dict]:

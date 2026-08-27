@@ -1,4 +1,11 @@
-from marketplace.keys import FetchKey, fetch_key_for_user, group_users_by_fetch_key, user_is_pollable
+from marketplace.keys import (
+    FetchKey,
+    fetch_key_for_user,
+    group_users_by_fetch_key,
+    user_is_avito_pollable,
+    user_is_kufar_pollable,
+    user_is_pollable,
+)
 from marketplace.registry import adapter_for_user, get_adapter
 from marketplace.types import (
     COUNTRY_BY,
@@ -25,5 +32,7 @@ __all__ = [
     "group_users_by_fetch_key",
     "normalize_country",
     "normalize_primary_source",
+    "user_is_avito_pollable",
+    "user_is_kufar_pollable",
     "user_is_pollable",
 ]

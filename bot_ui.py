@@ -4,6 +4,7 @@ import time
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import (
+    AVITO_ENABLED,
     CURRENCY_SIGN,
     DEFAULT_MEMORY_VOLUMES,
     MEMORY_VOLUME_OPTIONS,
@@ -15,7 +16,14 @@ from config import (
 )
 from db import count_referrals, ensure_referral_code
 from kufar_catalog import QUICK_RGN_BUTTONS, user_city_label
-from marketplace.types import COUNTRY_BY, COUNTRY_LABELS, normalize_country
+from marketplace.types import (
+    COUNTRY_BY,
+    COUNTRY_LABELS,
+    COUNTRY_RU,
+    SOURCE_AVITO,
+    SOURCE_KUFAR,
+    normalize_country,
+)
 from product_catalog import (
     category_label,
     is_phones_category,
@@ -100,6 +108,18 @@ def help_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def user_source_label(user: dict | None) -> str:
+    country = normalize_country((user or {}).get("country"))
+    if country == COUNTRY_RU:
+        return "Россия · Avito"
+    return "Беларусь · Kufar"
+
+
+def user_avito_city_label(user: dict | None) -> str:
+    label = ((user or {}).get("avito_city_label") or "").strip()
+    return label or "не выбран"
+
+
 def home_text(user: dict | None, *, is_new: bool) -> str:
     if user is None:
         return (
@@ -111,14 +131,19 @@ def home_text(user: dict | None, *, is_new: bool) -> str:
     models_n = _kw_count(user)
     max_p = user.get("max_price") or 0
     status = "уведомления включены" if active else "на паузе"
+    source_line = user_source_label(user)
     cat = category_label(user.get("product_category"))
     lines = [
         "<b>Kufi</b>",
-        f"Kufar · {status}",
+        f"{source_line} · {status}",
         "",
         f"{cat} · {models_n} {_plural_models(models_n)}",
     ]
-    geo = user_city_label(user)
+    country = normalize_country(user.get("country"))
+    if country == COUNTRY_RU:
+        geo = user_avito_city_label(user)
+    else:
+        geo = user_city_label(user)
     detail = f"до {format_price(max_p)} · {geo}"
     if is_phones_category(user.get("product_category")):
         mem = (user.get("memory_volumes") or list(DEFAULT_MEMORY_VOLUMES))
@@ -139,6 +164,8 @@ def home_text(user: dict | None, *, is_new: bool) -> str:
         elif mode == "ideal":
             lines.append("Поток: идеальные")
 
+    if country == COUNTRY_RU and not AVITO_ENABLED:
+        lines.append("Рассылка Avito — скоро.")
     if models_n == 0:
         lines.append("Выберите модели в «Товары».")
     elif not active:
@@ -293,16 +320,22 @@ def memory_keyboard(user: dict | None) -> InlineKeyboardMarkup:
 def country_screen_text(user: dict | None) -> str:
     country = normalize_country((user or {}).get("country"))
     current = COUNTRY_LABELS.get(country, country)
+    ru_note = (
+        "Россия — Avito (город и рассылка при включении)."
+        if AVITO_ENABLED
+        else "Россия — скоро (Avito)."
+    )
     return (
         "<b>Страна</b>\n"
         f"Сейчас: <b>{current}</b>\n"
-        "Беларусь — Kufar. Россия — скоро (Avito)."
+        f"Беларусь — Kufar. {ru_note}"
     )
 
 
 def country_keyboard(user: dict | None) -> InlineKeyboardMarkup:
     country = normalize_country((user or {}).get("country"))
     by_mark = " ✅" if country == COUNTRY_BY else ""
+    ru_label = "Россия · Avito" if AVITO_ENABLED else "Россия · скоро"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -313,8 +346,59 @@ def country_keyboard(user: dict | None) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="Россия · скоро",
+                    text=ru_label,
                     callback_data="country:ru",
+                )
+            ],
+            back_row(),
+        ]
+    )
+
+
+def avito_city_screen_text(user: dict | None) -> str:
+    current = user_avito_city_label(user)
+    hint = ""
+    if not AVITO_ENABLED:
+        hint = "\nРассылка Avito ещё не запущена — город можно выбрать заранее."
+    return (
+        "<b>Город (Avito)</b>\n"
+        f"Сейчас: <b>{current}</b>\n"
+        "Введите название, например Москва или Смоленск."
+        f"{hint}"
+    )
+
+
+def avito_city_typed_prompt_text() -> str:
+    return (
+        "<b>Город (Avito)</b>\n"
+        "Введите название города, например "
+        "<code>Москва</code> или <code>Смоленск</code>."
+    )
+
+
+def avito_city_pick_keyboard(options: list[dict]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for idx, opt in enumerate(options):
+        label = str(opt.get("label") or "")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"avito:pick:{idx}",
+                )
+            ]
+        )
+    rows.append(back_row())
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def avito_city_keyboard(user: dict | None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⌨️ Ввести город",
+                    callback_data="avito:city:typed",
                 )
             ],
             back_row(),

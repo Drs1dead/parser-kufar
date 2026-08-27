@@ -25,6 +25,7 @@ from kufar_catalog import CITY_RGN, CITY_LABELS, DEFAULT_CITY, normalize_city, R
 from marketplace.types import (
     COUNTRY_BY,
     COUNTRIES,
+    SOURCE_AVITO,
     SOURCE_KUFAR,
     default_source_for_country,
     normalize_country,
@@ -91,7 +92,9 @@ _USER_SELECT = (
     "chat_id, active, role, vip_until, max_price, keywords, sent_count, created_at, "
     "vip_feed_mode, username, memory_volumes, referral_code, referred_by, "
     "poll_last_vip, poll_last_regular, city, product_category, "
-    "city_rgn, city_ar, city_label, country, primary_source"
+    "city_rgn, city_ar, city_label, country, primary_source, "
+    "avito_city_id, avito_region_id, avito_city_label, "
+    "poll_last_avito_vip, poll_last_avito_regular"
 )
 
 def _row_to_user(row: tuple) -> dict:
@@ -128,6 +131,11 @@ def _row_to_user(row: tuple) -> dict:
         "primary_source": normalize_primary_source(
             row[21] if len(row) > 21 else None
         ),
+        "avito_city_id": (row[22] or "").strip() if len(row) > 22 else "",
+        "avito_region_id": (row[23] or "").strip() if len(row) > 23 else "",
+        "avito_city_label": (row[24] or "").strip() if len(row) > 24 else "",
+        "poll_last_avito_vip": int(row[25] or 0) if len(row) > 25 else 0,
+        "poll_last_avito_regular": int(row[26] or 0) if len(row) > 26 else 0,
     }
 
 
@@ -375,6 +383,22 @@ def init_db() -> None:
     if "source" not in sent_cols:
         _execute(
             f"ALTER TABLE sent_prices ADD COLUMN source TEXT NOT NULL DEFAULT '{SOURCE_KUFAR}'"
+        )
+    cols = _table_columns("users")
+    if "avito_city_id" not in cols:
+        _execute("ALTER TABLE users ADD COLUMN avito_city_id TEXT NOT NULL DEFAULT ''")
+    if "avito_region_id" not in cols:
+        _execute("ALTER TABLE users ADD COLUMN avito_region_id TEXT NOT NULL DEFAULT ''")
+    if "avito_city_label" not in cols:
+        _execute("ALTER TABLE users ADD COLUMN avito_city_label TEXT NOT NULL DEFAULT ''")
+    cols = _table_columns("users")
+    if "poll_last_avito_vip" not in cols:
+        _execute(
+            "ALTER TABLE users ADD COLUMN poll_last_avito_vip INTEGER NOT NULL DEFAULT 0"
+        )
+    if "poll_last_avito_regular" not in cols:
+        _execute(
+            "ALTER TABLE users ADD COLUMN poll_last_avito_regular INTEGER NOT NULL DEFAULT 0"
         )
     _executescript(
         """
@@ -645,6 +669,27 @@ def update_geo(
     }
 
 
+def update_avito_geo(
+    chat_id: int,
+    region_id: str,
+    city_id: str,
+    label: str,
+) -> dict[str, str]:
+    region_clean = str(region_id or "").strip()
+    city_clean = str(city_id or "").strip()
+    label_clean = (label or "").strip()
+    _execute(
+        "UPDATE users SET avito_region_id = ?, avito_city_id = ?, avito_city_label = ? "
+        "WHERE chat_id = ?",
+        (region_clean, city_clean, label_clean, chat_id),
+    )
+    return {
+        "avito_region_id": region_clean,
+        "avito_city_id": city_clean,
+        "avito_city_label": label_clean,
+    }
+
+
 def update_product_category(chat_id: int, category: str, *, reset_keywords: bool = True) -> str:
     slug = normalize_category(category)
     if reset_keywords:
@@ -785,8 +830,26 @@ def prune_seen_ads(retention_days: int | None = None) -> int:
     return cur.rowcount if cur.rowcount is not None else 0
 
 
-def set_poll_last_run(chat_id: int, *, is_vip: bool) -> None:
+def set_poll_last_run(
+    chat_id: int,
+    *,
+    is_vip: bool,
+    source: str = SOURCE_KUFAR,
+) -> None:
     now = int(time.time())
+    src = normalize_primary_source(source)
+    if src == SOURCE_AVITO:
+        if is_vip:
+            _execute(
+                "UPDATE users SET poll_last_avito_vip = ? WHERE chat_id = ?",
+                (now, chat_id),
+            )
+        else:
+            _execute(
+                "UPDATE users SET poll_last_avito_regular = ? WHERE chat_id = ?",
+                (now, chat_id),
+            )
+        return
     if is_vip:
         _execute(
             "UPDATE users SET poll_last_vip = ? WHERE chat_id = ?",

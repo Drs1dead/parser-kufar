@@ -12,7 +12,7 @@ from config import (
 )
 from currency_display import format_triple_price
 from kufar_catalog import user_city_label
-from marketplace.types import normalize_country
+from marketplace.types import normalize_country, SOURCE_AVITO
 from product_catalog import category_label
 
 _CAPTION_SAFE_MAX = 980
@@ -53,7 +53,7 @@ def truncate_ad_caption(text: str, *, max_len: int = _CAPTION_SAFE_MAX) -> str:
     if len(text) <= max_len:
         return text
     link_match = re.search(
-        r'(\n🔗 <a href="[^"]+">Открыть на Kufar</a>\s*)$',
+        r'(\n🔗 <a href="[^"]+">Открыть на (?:Kufar|Avito)</a>\s*)$',
         text,
     )
     suffix = link_match.group(1) if link_match else ""
@@ -123,7 +123,8 @@ def format_ad(
         parts.append("")
         parts.append(description)
     parts.append("")
-    parts.append(f'🔗 <a href="{_esc(link)}">Открыть на Kufar</a>')
+    link_label = "Открыть на Avito" if ad.get("source") == SOURCE_AVITO else "Открыть на Kufar"
+    parts.append(f'🔗 <a href="{_esc(link)}">{link_label}</a>')
 
     return "\n".join(parts)
 

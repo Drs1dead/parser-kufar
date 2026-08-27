@@ -21,8 +21,12 @@ marketplace/
   types.py           # NormalizedAd, SOURCE_*, COUNTRY_*
   protocol.py        # MarketplaceAdapter Protocol
   kufar.py           # Адаптер Kufar (normalize + fetch_for_key)
+  avito.py           # Stub Avito (fetch gated by AVITO_ENABLED)
   registry.py        # get_adapter / adapter_for_user
   keys.py            # FetchKey (source + категория + geo + модели + память)
+
+avito_geo.py         # Поиск городов России (geo/avito_geo.json)
+geo/avito_geo.json   # Seed: Москва, СПб, Смоленск
 
 handlers/
   __init__.py        # Собирает все роутеры
@@ -37,11 +41,34 @@ handlers/
 
 ## Поток рассылки
 
-1. `poller` берёт due-пользователей с `country=by` и `primary_source=kufar` (Россия/Avito — без poll до Фазы Avito). При `KUFAR_USE_CATALOG` группирует их по ключу `source + категория + rgn + ar + модели + память` (память только у смартфонов) и качает маркетплейс **один раз на ключ** через `get_adapter(source).fetch_for_key` (TTL-кэш ~18 с). Текстовый `query` не используем: на Kufar это полнотекст, а не фильтр модели.
-2. Для каждого due — `match_ads_for_user` по батчу его ключа. При catalog: без `smart_filtering` (кроме VIP «идеальные»), магазины (`company_ad`) и тонкий антихлам в заголовке; модель (и память у смартфонов) ещё раз проверяются локально.
-3. Новые объявления отправляются в Telegram (`formatter.format_ad`).
+1. `poller` разделяет due-списки: **Kufar** (`user_is_kufar_pollable`) и **Avito** (`user_is_avito_pollable`, только при `AVITO_ENABLED=true`). Для каждого источника — отдельный `_dispatch_due` с `source=kufar|avito`, без смешивания HTTP-батчей.
+2. При `KUFAR_USE_CATALOG` группирует Kufar-пользователей по ключу `source + категория + rgn + ar + модели + память` (память только у смартфонов) и качает маркетплейс **один раз на ключ** через `get_adapter(source).fetch_for_key` (TTL-кэш ~18 с для Kufar, `AVITO_FETCH_CACHE_TTL_SECONDS` для Avito). Текстовый `query` не используем: на Kufar это полнотекст, а не фильтр модели.
+3. Для каждого due — `match_ads_for_user` по батчу его ключа. При catalog: без `smart_filtering` (кроме VIP «идеальные»), магазины (`company_ad`) и тонкий антихлам в заголовке; модель (и память у смартфонов) ещё раз проверяются локально.
+4. Новые объявления отправляются в Telegram (`formatter.format_ad`).
 
-Фасеты: [`kufar_catalog.py`](kufar_catalog.py). Нормализация объявлений и fetch — [`marketplace/kufar.py`](marketplace/kufar.py). Старый текстовый fetch (`KUFAR_QUERIES`) — если `KUFAR_USE_CATALOG=false`.
+Фасеты: [`kufar_catalog.py`](kufar_catalog.py). Нормализация и fetch Kufar — [`marketplace/kufar.py`](marketplace/kufar.py). Avito — [`marketplace/avito.py`](marketplace/avito.py) (stub: `fetch=[]` при `AVITO_ENABLED=false`). Старый текстовый fetch (`KUFAR_QUERIES`) — если `KUFAR_USE_CATALOG=false`.
+
+### Фаза 4 — Avito (отдельный трек)
+
+```mermaid
+flowchart LR
+  Poller --> KufarDispatch[kufar_due]
+  Poller --> AvitoDispatch[avito_due]
+  KufarDispatch --> KufarAdapter
+  AvitoDispatch --> AvitoAdapter
+  AvitoAdapter -->|"AVITO_ENABLED=false"| Empty[fetch empty]
+  AvitoAdapter -->|"enabled + feed"| Feed[Partner feed]
+```
+
+| Компонент | Kufar (BY) | Avito (RU) |
+|-----------|------------|------------|
+| Geo в БД | `city_rgn`, `city_ar`, `city_label` | `avito_region_id`, `avito_city_id`, `avito_city_label` |
+| Geo UI | `kufar_geo` + `city:rgn:` | `avito_geo` + `avito:city:` |
+| Poll timestamps | `poll_last_vip`, `poll_last_regular` | `poll_last_avito_vip`, `poll_last_avito_regular` |
+| Интервалы | `VIP_CHECK_INTERVAL`, `REGULAR_CHECK_INTERVAL` | `AVITO_VIP_CHECK_INTERVAL`, `AVITO_CHECK_INTERVAL` |
+| Feature gate | всегда (BY) | `AVITO_ENABLED` |
+
+Критерии легального канала данных — [`docs/AVITO_DATA_CHANNEL.md`](docs/AVITO_DATA_CHANNEL.md). Парсинг avito.ru в прод **не** входит в план.
 
 ### Профиль: страна и маркетплейс
 
@@ -50,7 +77,7 @@ handlers/
 | `users.country` | `by` / `ru` | Страна в UI |
 | `users.primary_source` | `kufar` / `avito` | Адаптер для fetch и `source` в seen/prices |
 
-Сейчас активен только `by` + `kufar`. `seen_ads` и `market_prices` фильтруются по `source`.
+Сейчас активен poll для `by` + `kufar`. Avito poll включается только при `AVITO_ENABLED=true` и заполненном `avito_city_id`. `seen_ads` и `market_prices` фильтруются по `source`.
 
 ### VIP-потоки (`users.vip_feed_mode`)
 

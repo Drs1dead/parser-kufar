@@ -25,9 +25,19 @@ class KufarAdapter:
         *,
         session: aiohttp.ClientSession | None = None,
     ) -> list[NormalizedAd]:
-        source, category, rgn, ar, models, memories = key
+        source, category, geo_a, geo_b, models, memories = key
         if source != SOURCE_KUFAR:
             return []
+        try:
+            rgn = int(geo_a)
+        except (TypeError, ValueError):
+            rgn = 7
+        ar: int | None = None
+        if geo_b:
+            try:
+                ar = int(geo_b)
+            except (TypeError, ValueError):
+                ar = None
         raw_ads = await fetch_ads_for_key(
             category,
             rgn,

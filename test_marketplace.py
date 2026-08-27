@@ -1,5 +1,6 @@
 """Marketplace layer: types, registry, Kufar adapter."""
 import unittest
+from unittest.mock import patch
 
 from marketplace.kufar import KufarAdapter
 from marketplace.registry import get_adapter
@@ -27,14 +28,20 @@ class MarketplaceNormalizeTests(unittest.TestCase):
         self.assertEqual(ad["title"], "iPhone 15")
 
 
-class MarketplaceRegistryTests(unittest.TestCase):
+class MarketplaceRegistryTests(unittest.IsolatedAsyncioTestCase):
     def test_get_adapter_kufar(self) -> None:
         adapter = get_adapter(SOURCE_KUFAR)
         self.assertEqual(adapter.source, SOURCE_KUFAR)
 
-    def test_get_adapter_avito_not_implemented(self) -> None:
-        with self.assertRaises(NotImplementedError):
-            get_adapter(SOURCE_AVITO)
+    def test_get_adapter_avito(self) -> None:
+        adapter = get_adapter(SOURCE_AVITO)
+        self.assertEqual(adapter.source, SOURCE_AVITO)
+
+    async def test_avito_fetch_empty_when_disabled(self) -> None:
+        key = (SOURCE_AVITO, "phones", "637640", "637640", ("iphone 15",), ("256",))
+        with patch("marketplace.avito.AVITO_ENABLED", False):
+            ads = await get_adapter(SOURCE_AVITO).fetch_for_key(key)
+        self.assertEqual(ads, [])
 
 
 if __name__ == "__main__":

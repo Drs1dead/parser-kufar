@@ -8,19 +8,22 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from config import (
+    AVITO_ENABLED,
     CURRENCY_SIGN,
     DEFAULT_MEMORY_VOLUMES,
     MAX_PRICE_PRESETS,
     MEMORY_VOLUME_OPTIONS,
 )
 from kufar_catalog import QUICK_RGN_BUTTONS
-from kufar_geo import resolve_geo_path, search_places
+from kufar_geo import search_places as kufar_search_places
+from avito_geo import place_to_option, search_places as avito_search_places
 from product_catalog import is_phones_category
 from db import (
     get_user,
     redeem_promo_code,
     set_active,
     set_vip,
+    update_avito_geo,
     update_city,
     update_country,
     update_geo,
@@ -28,9 +31,13 @@ from db import (
     update_memory_volumes,
     update_vip_feed_mode,
 )
-from marketplace.types import COUNTRY_BY, normalize_country
+from marketplace.types import COUNTRY_BY, COUNTRY_RU, normalize_country
 from bot_ui import (
     HELP_TEXT,
+    avito_city_keyboard,
+    avito_city_pick_keyboard,
+    avito_city_screen_text,
+    avito_city_typed_prompt_text,
     back_keyboard,
     back_row,
     city_keyboard,
@@ -247,7 +254,74 @@ async def on_country(cb: CallbackQuery, state: FSMContext) -> None:
         return
 
     if data == "country:ru":
-        await cb.answer("Скоро — Avito", show_alert=True)
+        if not AVITO_ENABLED:
+            await cb.answer("Скоро — Avito", show_alert=True)
+            return
+        await state.clear()
+        geo = update_country(chat_id, COUNTRY_RU)
+        user["country"] = geo["country"]
+        user["primary_source"] = geo["primary_source"]
+        await flush_screen(
+            cb,
+            avito_city_screen_text(user),
+            reply_markup=avito_city_keyboard(user),
+            notice="Россия · Avito",
+        )
+        return
+
+    await cb.answer()
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("avito:"))
+async def on_avito_city(cb: CallbackQuery, state: FSMContext) -> None:
+    if cb.message is None:
+        await cb.answer()
+        return
+    user = await require_user_cb(cb)
+    if user is None:
+        return
+    chat_id = cb.message.chat.id
+    data = cb.data or ""
+
+    if data == "avito:city:typed":
+        await state.set_state(CityInputState.waiting_text)
+        await state.update_data(avito_city=True)
+        await flush_screen(
+            cb,
+            avito_city_typed_prompt_text(),
+            reply_markup=back_keyboard(),
+        )
+        return
+
+    if data.startswith("avito:pick:"):
+        raw = data[11:]
+        if not raw.isdigit():
+            await cb.answer("Неизвестный вариант", show_alert=True)
+            return
+        idx = int(raw)
+        fsm_data = await state.get_data()
+        options = fsm_data.get("avito_city_options") or []
+        if idx < 0 or idx >= len(options):
+            await cb.answer("Список устарел — введите город снова", show_alert=True)
+            return
+        opt = options[idx]
+        geo = update_avito_geo(
+            chat_id,
+            str(opt.get("region_id") or ""),
+            str(opt.get("city_id") or ""),
+            str(opt.get("label") or ""),
+        )
+        user.update(geo)
+        await state.clear()
+        await flush_screen(
+            cb,
+            home_text(user, is_new=False),
+            reply_markup=home_keyboard(
+                is_admin=is_admin(cb.from_user.id if cb.from_user else 0),
+                user=user,
+            ),
+            notice=f"📍 {geo['avito_city_label']}",
+        )
         return
 
     await cb.answer()
@@ -384,10 +458,14 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
             return
 
         if data == "nav:city":
-            if normalize_country(user.get("country")) != COUNTRY_BY:
-                await cb.answer("Город для России — после запуска Avito", show_alert=True)
-                return
             await state.clear()
+            if normalize_country(user.get("country")) == COUNTRY_RU:
+                await flush_screen(
+                    cb,
+                    avito_city_screen_text(user),
+                    reply_markup=avito_city_keyboard(user),
+                )
+                return
             await flush_screen(
                 cb,
                 city_screen_text(user),
@@ -396,6 +474,15 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
             return
 
         if data == "nav:city:typed":
+            if normalize_country(user.get("country")) == COUNTRY_RU:
+                await state.set_state(CityInputState.waiting_text)
+                await state.update_data(avito_city=True)
+                await flush_screen(
+                    cb,
+                    avito_city_typed_prompt_text(),
+                    reply_markup=back_keyboard(),
+                )
+                return
             await state.set_state(CityInputState.waiting_text)
             await state.update_data(city_typing=True)
             await flush_screen(
@@ -520,7 +607,47 @@ async def on_city_text(msg: Message, state: FSMContext) -> None:
             )
             return
 
-        matches = search_places(text, limit=5)
+        fsm_data = await state.get_data()
+        is_avito = bool(fsm_data.get("avito_city")) or normalize_country(
+            user.get("country")
+        ) == COUNTRY_RU
+
+        if is_avito:
+            matches = avito_search_places(text, limit=5)
+            if not matches:
+                await msg.answer(
+                    "Город не найден. Проверьте название.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=avito_city_keyboard(user),
+                )
+                return
+            if len(matches) == 1:
+                place = matches[0]
+                geo = update_avito_geo(
+                    chat_id,
+                    place.region_id,
+                    place.city_id,
+                    place.label,
+                )
+                user.update(geo)
+                await state.clear()
+                uid = actor_user_id(msg)
+                await msg.answer(
+                    f"📍 Город: <b>{place.label}</b>\n\n{home_text(user, is_new=False)}",
+                    reply_markup=home_keyboard(is_admin=is_admin(uid), user=user),
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+            options = [place_to_option(p) for p in matches[:5]]
+            await state.update_data(avito_city_options=options)
+            await msg.answer(
+                "Выберите город:",
+                reply_markup=avito_city_pick_keyboard(options),
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        matches = kufar_search_places(text, limit=5)
         if not matches:
             await msg.answer(
                 "Город не найден. Проверьте название или выберите область кнопкой ниже.",

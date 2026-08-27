@@ -17,10 +17,12 @@ from aiogram.exceptions import (
 from aiogram.types import InputMediaPhoto
 
 from config import (
+    AVITO_CHECK_INTERVAL,
+    AVITO_FETCH_CACHE_TTL_SECONDS,
+    AVITO_VIP_CHECK_INTERVAL,
     CHECK_INTERVAL,
     FETCH_CACHE_TTL_SECONDS,
     FIRST_RUN_LIMIT,
-    KUFAR_CATALOG_COMPARE,
     KUFAR_USE_CATALOG,
     MARKET_DISCOUNT_THRESHOLD,
     MAX_AD_PHOTOS,
@@ -49,13 +51,13 @@ from formatter import format_ad, truncate_ad_caption
 from logging_setup import log_exception
 from marketplace.keys import (
     FetchKey,
-    fetch_key_for_user,
     group_users_by_fetch_key,
-    user_is_pollable,
+    user_is_avito_pollable,
+    user_is_kufar_pollable,
     user_primary_source,
 )
 from marketplace.registry import get_adapter
-from marketplace.types import normalize_country, normalize_primary_source
+from marketplace.types import SOURCE_AVITO, SOURCE_KUFAR, normalize_country, normalize_primary_source
 from kufar_fetch import (
     DEFAULT_HEADERS,
     enrich_ads_descriptions,
@@ -112,26 +114,47 @@ def _is_vip_user(user: dict) -> bool:
     return user.get("role") == "vip"
 
 
-def _user_interval(user: dict) -> float:
-    return float(VIP_CHECK_INTERVAL if _is_vip_user(user) else REGULAR_CHECK_INTERVAL)
+def _poll_source(user: dict) -> str:
+    return user_primary_source(user)
 
 
-def _user_last_run(user: dict) -> float:
-    if _is_vip_user(user):
+def _user_interval(user: dict, source: str | None = None) -> float:
+    src = normalize_primary_source(source or _poll_source(user))
+    is_vip = _is_vip_user(user)
+    if src == SOURCE_AVITO:
+        return float(
+            AVITO_VIP_CHECK_INTERVAL if is_vip else AVITO_CHECK_INTERVAL
+        )
+    return float(VIP_CHECK_INTERVAL if is_vip else REGULAR_CHECK_INTERVAL)
+
+
+def _user_last_run(user: dict, source: str | None = None) -> float:
+    src = normalize_primary_source(source or _poll_source(user))
+    is_vip = _is_vip_user(user)
+    if src == SOURCE_AVITO:
+        if is_vip:
+            return float(user.get("poll_last_avito_vip") or 0)
+        return float(user.get("poll_last_avito_regular") or 0)
+    if is_vip:
         return float(user.get("poll_last_vip") or 0)
     return float(user.get("poll_last_regular") or 0)
 
 
-def _seconds_until_due(user: dict, now: float) -> float:
-    prev = _user_last_run(user)
+def _seconds_until_due(user: dict, now: float, source: str | None = None) -> float:
+    prev = _user_last_run(user, source)
     if prev <= 0:
         return 0.0
-    return max(0.0, _user_interval(user) - (now - prev))
+    return max(0.0, _user_interval(user, source) - (now - prev))
 
 
-def _should_process_user(user: dict, *, now: float | None = None) -> bool:
+def _should_process_user(
+    user: dict,
+    *,
+    now: float | None = None,
+    source: str | None = None,
+) -> bool:
     t = time.time() if now is None else now
-    return _seconds_until_due(user, t) <= 0.0
+    return _seconds_until_due(user, t, source) <= 0.0
 
 
 def _poll_sleep_seconds(
@@ -145,7 +168,9 @@ def _poll_sleep_seconds(
     cap = max(0.05, cap)
     if not users:
         return cap
-    soonest = min(_seconds_until_due(user, now) for user in users)
+    soonest = min(
+        _seconds_until_due(user, now, _poll_source(user)) for user in users
+    )
     if soonest <= 0:
         return 0.05
     return min(cap, soonest)
@@ -153,9 +178,15 @@ def _poll_sleep_seconds(
 
 def _mark_user_polled(user: dict) -> None:
     is_vip = _is_vip_user(user)
-    set_poll_last_run(user["chat_id"], is_vip=is_vip)
+    source = _poll_source(user)
+    set_poll_last_run(user["chat_id"], is_vip=is_vip, source=source)
     stamped = int(time.time())
-    if is_vip:
+    if source == SOURCE_AVITO:
+        if is_vip:
+            user["poll_last_avito_vip"] = stamped
+        else:
+            user["poll_last_avito_regular"] = stamped
+    elif is_vip:
         user["poll_last_vip"] = stamped
     else:
         user["poll_last_regular"] = stamped
@@ -297,16 +328,6 @@ async def _process_user(
     already_seen = seen_links_for(chat_id, links, source=source)
 
     ideal_mode = is_vip and feed_mode == "ideal"
-    need_desc = [
-        ad
-        for ad in to_send
-        if ad.get("link")
-        and ad["link"] not in already_seen
-        and not (ad.get("description") or "").strip()
-    ]
-    if need_desc:
-        await enrich_ads_descriptions(need_desc)
-
     if ideal_mode:
         strict_ok: list[dict] = []
         for ad in to_send:
@@ -390,8 +411,45 @@ async def _process_user(
             log_exception(log, "first-run digest failed chat_id=%s: %s", chat_id, exc)
 
 
+async def _batch_enrich_ideal_descriptions(
+    due: list[dict],
+    groups: dict[FetchKey, list[dict]],
+    ads_by_key: dict[FetchKey, list[dict]],
+    market_cache: dict[str, int | None],
+    *,
+    session: aiohttp.ClientSession,
+) -> None:
+    """Один HTTP-проход на link для VIP «идеальные» в batch dispatch."""
+    by_link: dict[str, dict] = {}
+    for key, group_users in groups.items():
+        ads = ads_by_key.get(key) or []
+        if not ads:
+            continue
+        for user in group_users:
+            if user.get("role") != "vip" or (user.get("vip_feed_mode") or "normal") != "ideal":
+                continue
+            matched = match_ads_for_user(user, ads, market_cache)
+            if not matched:
+                continue
+            chat_id = user["chat_id"]
+            source = user_primary_source(user)
+            links = [ad["link"] for ad in matched if ad.get("link")]
+            already_seen = seen_links_for(chat_id, links, source=source)
+            for ad in matched:
+                link = ad.get("link")
+                if not link or link in already_seen:
+                    continue
+                if (ad.get("description") or "").strip():
+                    continue
+                by_link.setdefault(link, ad)
+    if by_link:
+        await enrich_ads_descriptions(list(by_link.values()), session=session)
+
+
 async def _fetch_catalog_groups(
     groups: dict[FetchKey, list[dict]],
+    *,
+    session: aiohttp.ClientSession,
 ) -> tuple[dict[FetchKey, list[dict]], list[dict]]:
     keys = list(groups.keys())
     if not keys:
@@ -400,23 +458,24 @@ async def _fetch_catalog_groups(
     ads_by_key: dict[FetchKey, list[dict]] = {}
     keys_to_fetch: list[FetchKey] = []
     for key in keys:
+        ttl = (
+            AVITO_FETCH_CACHE_TTL_SECONDS
+            if key[0] == SOURCE_AVITO
+            else FETCH_CACHE_TTL_SECONDS
+        )
         cached = _fetch_cache.get(key)
-        if cached and now - cached[0] < FETCH_CACHE_TTL_SECONDS:
+        if cached and now - cached[0] < ttl:
             ads_by_key[key] = cached[1]
         else:
             keys_to_fetch.append(key)
 
     if keys_to_fetch:
-        connector = aiohttp.TCPConnector(limit=8)
-        async with aiohttp.ClientSession(
-            headers=DEFAULT_HEADERS, connector=connector
-        ) as session:
-            batches = await asyncio.gather(
-                *(
-                    get_adapter(key[0]).fetch_for_key(key, session=session)
-                    for key in keys_to_fetch
-                )
+        batches = await asyncio.gather(
+            *(
+                get_adapter(key[0]).fetch_for_key(key, session=session)
+                for key in keys_to_fetch
             )
+        )
         for key, ads in zip(keys_to_fetch, batches):
             _fetch_cache[key] = (now, ads)
             ads_by_key[key] = ads
@@ -437,37 +496,45 @@ async def _dispatch_due(
     bot: Bot,
     due: list[dict],
     *,
-    compare_catalog: bool = False,
+    source: str = SOURCE_KUFAR,
 ) -> None:
     if not due:
         return
-    if KUFAR_USE_CATALOG:
+    src = normalize_primary_source(source)
+    use_catalog = KUFAR_USE_CATALOG if src == SOURCE_KUFAR else True
+    if use_catalog:
         groups = group_users_by_fetch_key(due)
-        ads_by_key, merged = await _fetch_catalog_groups(groups)
-        if compare_catalog and KUFAR_CATALOG_COMPARE:
-            text_ads = await fetch_ads()
-            log.info(
-                "kufar catalog compare catalog=%d text=%d keys=%d",
-                len(merged),
-                len(text_ads),
-                len(groups),
+        connector = aiohttp.TCPConnector(limit=8)
+        async with aiohttp.ClientSession(
+            headers=DEFAULT_HEADERS, connector=connector
+        ) as session:
+            ads_by_key, merged = await _fetch_catalog_groups(groups, session=session)
+            await asyncio.to_thread(_ingest_market_prices_from_ads, merged)
+            market_cache: dict[str, int | None] = {}
+            await _batch_enrich_ideal_descriptions(
+                due, groups, ads_by_key, market_cache, session=session
             )
-        await asyncio.to_thread(_ingest_market_prices_from_ads, merged)
-        market_cache: dict[str, int | None] = {}
-        log.info(
-            "poll catalog ads=%d keys=%d due=%d",
-            len(merged),
-            len(groups),
-            len(due),
-        )
-        for user in due:
-            try:
-                key = fetch_key_for_user(user)
+            log.info(
+                "poll %s catalog ads=%d keys=%d due=%d",
+                src,
+                len(merged),
+                len(groups),
+                len(due),
+            )
+            for key, group_users in groups.items():
                 ads = ads_by_key.get(key) or []
-                await _process_user(bot, user, ads, market_cache)
-                _mark_user_polled(user)
-            except Exception:
-                log_exception(log, "poll user failed chat_id=%s", user["chat_id"])
+                for user in group_users:
+                    try:
+                        await _process_user(bot, user, ads, market_cache)
+                        _mark_user_polled(user)
+                    except Exception:
+                        log_exception(
+                            log, "poll user failed chat_id=%s", user["chat_id"]
+                        )
+        return
+
+    if src != SOURCE_KUFAR:
+        log.debug("poll %s skip — non-catalog path not supported", src)
         return
 
     ads = await fetch_ads()
@@ -517,26 +584,36 @@ async def poller(bot: Bot) -> None:
 
             users = await asyncio.to_thread(get_active_users, expire_vip=False)
             now = time.time()
-            vip_due = [
-                u
-                for u in users
-                if _is_vip_user(u)
-                and user_is_pollable(u)
-                and _should_process_user(u, now=now)
-            ]
-            regular_due = [
-                u
-                for u in users
-                if not _is_vip_user(u)
-                and user_is_pollable(u)
-                and _should_process_user(u, now=now)
-            ]
-            if not vip_due and not regular_due:
+
+            def _due_for(source: str, vip: bool) -> list[dict]:
+                pollable = (
+                    user_is_kufar_pollable if source == SOURCE_KUFAR else user_is_avito_pollable
+                )
+                return [
+                    u
+                    for u in users
+                    if pollable(u)
+                    and _is_vip_user(u) == vip
+                    and _should_process_user(u, now=now, source=source)
+                ]
+
+            kufar_vip_due = _due_for(SOURCE_KUFAR, vip=True)
+            kufar_regular_due = _due_for(SOURCE_KUFAR, vip=False)
+            avito_vip_due = _due_for(SOURCE_AVITO, vip=True)
+            avito_regular_due = _due_for(SOURCE_AVITO, vip=False)
+
+            if not (
+                kufar_vip_due
+                or kufar_regular_due
+                or avito_vip_due
+                or avito_regular_due
+            ):
                 log.debug("poll skip — no due subscribers")
             else:
-                # VIP отдельно: не ждёт fetch ключей обычных пользователей.
-                await _dispatch_due(bot, vip_due, compare_catalog=False)
-                await _dispatch_due(bot, regular_due)
+                kufar_due = kufar_vip_due + kufar_regular_due
+                avito_due = avito_vip_due + avito_regular_due
+                await _dispatch_due(bot, kufar_due, source=SOURCE_KUFAR)
+                await _dispatch_due(bot, avito_due, source=SOURCE_AVITO)
         except Exception:
             log_exception(log, "poll cycle failed")
 
