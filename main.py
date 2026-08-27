@@ -10,6 +10,8 @@ import bot_ui
 import handlers
 from config import (
     ADMIN_IDS,
+    AVITO_DEV_MOCK,
+    AVITO_ENABLED,
     CHECK_INTERVAL,
     MARKET_DISCOUNT_THRESHOLD,
     REGULAR_CHECK_INTERVAL,
@@ -73,6 +75,11 @@ async def main() -> None:
             loop.add_signal_handler(sig, _schedule_stop_polling)
         except NotImplementedError:
             pass
+
+    if AVITO_ENABLED and AVITO_DEV_MOCK:
+        log.warning(
+            "AVITO_DEV_MOCK=true — Avito poll uses geo/avito_mock_ads.json, not live data"
+        )
 
     poll_task = asyncio.create_task(poller(bot))
 

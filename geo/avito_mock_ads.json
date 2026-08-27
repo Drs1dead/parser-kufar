@@ -1,0 +1,58 @@
+[
+  {
+    "id": "mock-iphone15-msk",
+    "title": "Apple iPhone 15 256 GB",
+    "price_rub": 75000,
+    "url": "https://www.avito.ru/moskva/telefony/apple_iphone_15_256_mock",
+    "city": "Москва",
+    "region": "Москва",
+    "region_id": "637640",
+    "city_id": "637640",
+    "category": "phones",
+    "description": "Состояние отличное. АКБ 92%. Без ремонтов.",
+    "photos": [],
+    "published_at": "2026-01-15T10:00:00Z"
+  },
+  {
+    "id": "mock-iphone14-msk",
+    "title": "iPhone 14 128 GB",
+    "price_rub": 52000,
+    "url": "https://www.avito.ru/moskva/telefony/iphone_14_128_mock",
+    "city": "Москва",
+    "region": "Москва",
+    "region_id": "637640",
+    "city_id": "637640",
+    "category": "phones",
+    "description": "Хорошее состояние, один владелец.",
+    "photos": [],
+    "published_at": "2026-01-14T12:00:00Z"
+  },
+  {
+    "id": "mock-iphone15-smol",
+    "title": "Apple iPhone 15 256 GB",
+    "price_rub": 72000,
+    "url": "https://www.avito.ru/smolensk/telefony/iphone_15_256_smol_mock",
+    "city": "Смоленск",
+    "region": "Смоленск",
+    "region_id": "653430",
+    "city_id": "653430",
+    "category": "phones",
+    "description": "Отличное состояние. АКБ 88%.",
+    "photos": [],
+    "published_at": "2026-01-13T09:30:00Z"
+  },
+  {
+    "id": "mock-samsung-spb",
+    "title": "Samsung Galaxy S24 256 GB",
+    "price_rub": 68000,
+    "url": "https://www.avito.ru/sankt-peterburg/telefony/galaxy_s24_mock",
+    "city": "Санкт-Петербург",
+    "region": "Санкт-Петербург",
+    "region_id": "653240",
+    "city_id": "653240",
+    "category": "phones",
+    "description": "Полный комплект, без дефектов.",
+    "photos": [],
+    "published_at": "2026-01-12T18:00:00Z"
+  }
+]

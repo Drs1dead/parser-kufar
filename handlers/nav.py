@@ -31,7 +31,7 @@ from db import (
     update_memory_volumes,
     update_vip_feed_mode,
 )
-from marketplace.types import COUNTRY_BY, COUNTRY_RU, normalize_country
+from marketplace.types import COUNTRY_BY, COUNTRY_RU, FLAG_BY, FLAG_RU, normalize_country
 from bot_ui import (
     HELP_TEXT,
     avito_city_keyboard,
@@ -245,11 +245,12 @@ async def on_country(cb: CallbackQuery, state: FSMContext) -> None:
         geo = update_country(chat_id, COUNTRY_BY)
         user["country"] = geo["country"]
         user["primary_source"] = geo["primary_source"]
+        uid = cb.from_user.id if cb.from_user else 0
         await flush_screen(
             cb,
-            city_screen_text(user),
-            reply_markup=city_keyboard(user),
-            notice="🌍 Беларусь",
+            home_text(user, is_new=False),
+            reply_markup=home_keyboard(is_admin=is_admin(uid), user=user),
+            notice=f"{FLAG_BY} Беларусь · Kufar",
         )
         return
 
@@ -261,11 +262,12 @@ async def on_country(cb: CallbackQuery, state: FSMContext) -> None:
         geo = update_country(chat_id, COUNTRY_RU)
         user["country"] = geo["country"]
         user["primary_source"] = geo["primary_source"]
+        uid = cb.from_user.id if cb.from_user else 0
         await flush_screen(
             cb,
-            avito_city_screen_text(user),
-            reply_markup=avito_city_keyboard(user),
-            notice="Россия · Avito",
+            home_text(user, is_new=False),
+            reply_markup=home_keyboard(is_admin=is_admin(uid), user=user),
+            notice=f"{FLAG_RU} Россия · Avito",
         )
         return
 

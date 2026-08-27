@@ -19,6 +19,9 @@ COUNTRY_LABELS: dict[str, str] = {
     COUNTRY_RU: "Россия",
 }
 
+FLAG_BY = "🇧🇾"
+FLAG_RU = "🇷🇺"
+
 
 class NormalizedAd(dict[str, Any]):
     """Нормализованное объявление — dict для совместимости с filters/formatter."""

@@ -53,3 +53,24 @@ AVITO_FETCH_CACHE_TTL_SECONDS=30
 ```
 
 Set `AVITO_ENABLED=true` only after the checklist above.
+
+## Local dev mock (end-to-end без фида)
+
+Для smoke-теста UI + poller + карточки «Открыть на Avito» без HTTP к avito.ru:
+
+```env
+AVITO_ENABLED=true
+AVITO_DEV_MOCK=true
+```
+
+Данные: [`geo/avito_mock_ads.json`](geo/avito_mock_ads.json) — фильтрация по `FetchKey` (город, категория, модель, память), как catalog path на Kufar.
+
+Шаги в боте:
+
+1. Страна → Россия (возврат на главную; город — кнопка «Город»)
+2. Город → Москва / Смоленск
+3. Товары → модель (например iPhone 15), память
+4. Включить уведомления
+
+При старте бота в логах: `AVITO_DEV_MOCK=true — … mock_ads.json`.
+

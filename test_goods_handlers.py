@@ -1,7 +1,8 @@
 """Проверка, что ветка «Товары» не падает с NameError."""
 import unittest
+from unittest.mock import patch
 
-from bot_ui import home_keyboard, home_text
+from bot_ui import country_keyboard, home_keyboard, home_text
 from handlers.goods_ui import (
     _goods_categories_keyboard,
     _goods_categories_text,
@@ -31,6 +32,15 @@ class GoodsUiImportTests(unittest.TestCase):
 
 
 class HomeUiTests(unittest.TestCase):
+    def test_country_keyboard_has_flags(self) -> None:
+        with patch("bot_ui.AVITO_ENABLED", True):
+            kb = country_keyboard({"country": "by"})
+        by_btn = kb.inline_keyboard[0][0].text
+        ru_btn = kb.inline_keyboard[1][0].text
+        self.assertIn("🇧🇾", by_btn)
+        self.assertIn("🇷🇺", ru_btn)
+        self.assertIn("Kufar", by_btn)
+
     def test_home_card_is_compact(self) -> None:
         user = {
             "active": True,

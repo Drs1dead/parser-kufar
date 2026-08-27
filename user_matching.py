@@ -6,6 +6,7 @@ from collections.abc import Callable
 from config import FILTER_DEBUG_LOG, KUFAR_USE_CATALOG, MARKET_DISCOUNT_THRESHOLD
 from db import avg_market_price
 from marketplace.keys import user_primary_source
+from marketplace.types import SOURCE_AVITO
 from filters import (
     ad_device_key,
     exchange_reject_reason,
@@ -21,16 +22,25 @@ from product_catalog import is_phones_category
 VIP_SPECIAL_MAX_PRICE = 99_999_999
 
 
+def _is_avito_user(user: dict) -> bool:
+    return user_primary_source(user) == SOURCE_AVITO
+
+
+def _catalog_style_filters(user: dict) -> bool:
+    """Catalog-style local filter: Kufar catalog mode or Avito (no company_ad API)."""
+    return KUFAR_USE_CATALOG or _is_avito_user(user)
+
+
 def _smart_filtering_for(user: dict) -> bool:
     """Жёсткий отбор (целый телефон, не продажа, «новый» и т.д.) — только для VIP."""
-    if KUFAR_USE_CATALOG:
+    if _catalog_style_filters(user):
         return False
     return user.get("role") == "vip"
 
 
 def _basic_filtering_for(user: dict) -> bool:
     """Для обычных: отсекаем коробки/аксессуары, без остальных VIP-правил."""
-    if KUFAR_USE_CATALOG:
+    if _catalog_style_filters(user):
         return False
     return user.get("role") != "vip"
 
@@ -40,7 +50,26 @@ def _memory_filter_for(user: dict) -> bool:
 
 
 def geo_location_matches(ad: dict, user: dict) -> bool:
-    """Локальный safety-фильтр для мелких НП (city_ar задан)."""
+    """Локальный safety-фильтр по городу (Kufar ar или Avito city)."""
+    if _is_avito_user(user):
+        city_id = str(user.get("avito_city_id") or "").strip()
+        if not city_id:
+            return True
+        ad_city = str(ad.get("city_id") or "").strip()
+        ad_region = str(ad.get("region_id") or "").strip()
+        region_id = str(user.get("avito_region_id") or "").strip()
+        if ad_city and ad_city == city_id:
+            return True
+        if ad_region and region_id and ad_region == region_id:
+            return True
+        label = (user.get("avito_city_label") or "").strip()
+        if not label:
+            return True
+        token = " ".join(label.lower().replace("ё", "е").split())
+        hay = f"{ad.get('title') or ''} {ad.get('location') or ''}"
+        hay_norm = " ".join(hay.lower().replace("ё", "е").split())
+        return token in hay_norm
+
     if user.get("city_ar") is None:
         return True
     label = (user.get("city_label") or "").strip()
@@ -53,6 +82,7 @@ def geo_location_matches(ad: dict, user: dict) -> bool:
 
 
 def _passes_base(ad: dict, user: dict, *, max_price: int, skip_new_phone: bool = False) -> bool:
+    catalog_style = _catalog_style_filters(user)
     if not matches_filters(
         ad,
         max_price,
@@ -63,8 +93,8 @@ def _passes_base(ad: dict, user: dict, *, max_price: int, skip_new_phone: bool =
         device_filter=True,
         memory_filter=_memory_filter_for(user),
         skip_new_phone=skip_new_phone,
-        company_filter=KUFAR_USE_CATALOG,
-        thin_junk=KUFAR_USE_CATALOG,
+        company_filter=catalog_style,
+        thin_junk=catalog_style,
     ):
         return False
     return geo_location_matches(ad, user)
@@ -82,8 +112,8 @@ def _log_reject(ad: dict, user: dict, *, max_price: int, feed_mode: str) -> None
         basic_filtering=_basic_filtering_for(user),
         device_filter=True,
         memory_filter=_memory_filter_for(user),
-        company_filter=KUFAR_USE_CATALOG,
-        thin_junk=KUFAR_USE_CATALOG,
+        company_filter=_catalog_style_filters(user),
+        thin_junk=_catalog_style_filters(user),
     )
     if reason:
         log_filter_reject(ad, reason, chat_id=user["chat_id"], feed_mode=feed_mode)

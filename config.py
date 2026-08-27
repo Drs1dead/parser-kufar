@@ -271,6 +271,10 @@ AVITO_VIP_CHECK_INTERVAL = max(1, int(os.getenv("AVITO_VIP_CHECK_INTERVAL", "60"
 AVITO_FETCH_CACHE_TTL_SECONDS = max(
     1, int(os.getenv("AVITO_FETCH_CACHE_TTL_SECONDS", "30"))
 )
+_avito_dev_mock = os.getenv("AVITO_DEV_MOCK", "false").strip().lower()
+AVITO_DEV_MOCK = _avito_dev_mock in ("1", "true", "yes", "on")
+if AVITO_DEV_MOCK and not AVITO_ENABLED:
+    AVITO_DEV_MOCK = False
 
 # Не целый телефон: проверка по title + summary (стемы ловят стекла/стёкла).
 ACCESSORY_HEADLINE_STEMS: tuple[str, ...] = (

@@ -1,11 +1,12 @@
-"""Адаптер Avito — stub до легального фида (Фаза 4)."""
+"""Адаптер Avito — mock или feed (Фаза 4)."""
 from __future__ import annotations
 
 import logging
 
 import aiohttp
 
-from config import AVITO_ENABLED
+from avito_fetch import fetch_mock_ads_for_key
+from config import AVITO_DEV_MOCK, AVITO_ENABLED
 from marketplace.keys import FetchKey
 from marketplace.types import CURRENCY_RUB, NormalizedAd, SOURCE_AVITO
 
@@ -52,6 +53,8 @@ class AvitoAdapter:
         if not AVITO_ENABLED:
             log.debug("avito fetch skipped — AVITO_ENABLED=false key=%s", key[:4])
             return []
+        if AVITO_DEV_MOCK:
+            return [NormalizedAd(ad) for ad in fetch_mock_ads_for_key(key)]
         raise NotImplementedError(
             "Avito feed adapter is not configured — set AVITO_FEED_URL when channel is ready"
         )

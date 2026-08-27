@@ -20,6 +20,8 @@ from marketplace.types import (
     COUNTRY_BY,
     COUNTRY_LABELS,
     COUNTRY_RU,
+    FLAG_BY,
+    FLAG_RU,
     SOURCE_AVITO,
     SOURCE_KUFAR,
     normalize_country,
@@ -319,34 +321,36 @@ def memory_keyboard(user: dict | None) -> InlineKeyboardMarkup:
 
 def country_screen_text(user: dict | None) -> str:
     country = normalize_country((user or {}).get("country"))
+    flag = FLAG_RU if country == COUNTRY_RU else FLAG_BY
     current = COUNTRY_LABELS.get(country, country)
-    ru_note = (
-        "Россия — Avito (город и рассылка при включении)."
+    ru_line = (
+        f"{FLAG_RU} Россия — Avito"
         if AVITO_ENABLED
-        else "Россия — скоро (Avito)."
+        else f"{FLAG_RU} Россия — скоро (Avito)"
     )
     return (
         "<b>Страна</b>\n"
-        f"Сейчас: <b>{current}</b>\n"
-        f"Беларусь — Kufar. {ru_note}"
+        f"Сейчас: {flag} <b>{current}</b>\n"
+        f"{FLAG_BY} Беларусь — Kufar. {ru_line}."
     )
 
 
 def country_keyboard(user: dict | None) -> InlineKeyboardMarkup:
     country = normalize_country((user or {}).get("country"))
     by_mark = " ✅" if country == COUNTRY_BY else ""
-    ru_label = "Россия · Avito" if AVITO_ENABLED else "Россия · скоро"
+    ru_mark = " ✅" if country == COUNTRY_RU else ""
+    ru_suffix = " · Avito" if AVITO_ENABLED else " · скоро"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"Беларусь{by_mark}",
+                    text=f"{FLAG_BY} Беларусь · Kufar{by_mark}",
                     callback_data="country:by",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text=ru_label,
+                    text=f"{FLAG_RU} Россия{ru_suffix}{ru_mark}",
                     callback_data="country:ru",
                 )
             ],
