@@ -455,16 +455,17 @@ def avito_city_keyboard(user: dict | None) -> InlineKeyboardMarkup:
 def city_screen_text(user: dict | None) -> str:
     current = user_city_label(user)
     return (
-        "<b>Город</b>\n"
+        "<b>Город (Kufar)</b>\n"
         f"Сейчас: <b>{current}</b>\n"
-        "Введите название или выберите область."
+        "Кнопки ниже или ввод названия — Брест, Гродно и др.\n\n"
+        "После города — «Товары», «Цена» и «Включить» на главной."
     )
 
 
 def city_typed_prompt_text() -> str:
     return (
-        "📍 <b>Город</b>\n\n"
-        "Введите название города или населённого пункта, например "
+        "<b>Город (Kufar)</b>\n"
+        "Введите название города, например "
         "<code>Барановичи</code> или <code>Бобруйск</code>."
     )
 
@@ -493,14 +494,6 @@ def _region_selected(user: dict | None, rgn: int) -> bool:
 
 def city_keyboard(user: dict | None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text="⌨️ Ввести город",
-                callback_data="nav:city:typed",
-            )
-        ]
-    )
     row: list[InlineKeyboardButton] = []
     for rgn, label in QUICK_RGN_BUTTONS:
         mark = " ✅" if _region_selected(user, rgn) else ""
@@ -515,6 +508,14 @@ def city_keyboard(user: dict | None) -> InlineKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⌨️ Ввести город",
+                callback_data="nav:city:typed",
+            )
+        ]
+    )
     rows.append(back_row())
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
