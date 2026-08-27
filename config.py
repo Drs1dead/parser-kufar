@@ -246,6 +246,11 @@ KUFAR_CATALOG_COMPARE = os.getenv("KUFAR_CATALOG_COMPARE", "").strip().lower() i
     "yes",
 )
 
+# Кэш HTTP-ответа Kufar по fetch-ключу (сек). Общий для VIP и regular.
+FETCH_CACHE_TTL_SECONDS = max(1, int(os.getenv("FETCH_CACHE_TTL_SECONDS", "18")))
+MAX_AD_PHOTOS = max(1, int(os.getenv("MAX_AD_PHOTOS", "3")))
+AD_DESCRIPTION_MAX_CHARS = max(50, int(os.getenv("AD_DESCRIPTION_MAX_CHARS", "350")))
+
 # Не целый телефон: проверка по title + summary (стемы ловят стекла/стёкла).
 ACCESSORY_HEADLINE_STEMS: tuple[str, ...] = (
     "коробк",

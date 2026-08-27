@@ -5,7 +5,8 @@ __pycache__/
 bot.db
 bot.db-wal
 bot.db-shm
-data/
+data/*
+!data/kufar_geo.json
 
 # Локальная пояснительная записка (не в репозитории)
 ПОЯСНЕНИЕ_КОДА.txt

@@ -38,8 +38,21 @@ def _memory_filter_for(user: dict) -> bool:
     return is_phones_category(user.get("product_category"))
 
 
+def geo_location_matches(ad: dict, user: dict) -> bool:
+    """Локальный safety-фильтр для мелких НП (city_ar задан)."""
+    if user.get("city_ar") is None:
+        return True
+    label = (user.get("city_label") or "").strip()
+    if not label:
+        return True
+    token = " ".join(label.lower().replace("ё", "е").split())
+    hay = f"{ad.get('title') or ''} {ad.get('location') or ''}"
+    hay_norm = " ".join(hay.lower().replace("ё", "е").split())
+    return token in hay_norm
+
+
 def _passes_base(ad: dict, user: dict, *, max_price: int, skip_new_phone: bool = False) -> bool:
-    return matches_filters(
+    if not matches_filters(
         ad,
         max_price,
         user["keywords"],
@@ -51,7 +64,9 @@ def _passes_base(ad: dict, user: dict, *, max_price: int, skip_new_phone: bool =
         skip_new_phone=skip_new_phone,
         company_filter=KUFAR_USE_CATALOG,
         thin_junk=KUFAR_USE_CATALOG,
-    )
+    ):
+        return False
+    return geo_location_matches(ad, user)
 
 
 def _log_reject(ad: dict, user: dict, *, max_price: int, feed_mode: str) -> None:

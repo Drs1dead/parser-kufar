@@ -14,7 +14,7 @@ from config import (
     format_price,
 )
 from db import count_referrals, ensure_referral_code
-from kufar_catalog import CITY_LABELS, CITY_ORDER, city_label, normalize_city
+from kufar_catalog import QUICK_RGN_BUTTONS, user_city_label
 from product_catalog import (
     category_label,
     is_phones_category,
@@ -27,7 +27,6 @@ BOT_USERNAME: str = ""
 PRIVACY_POLICY_URL = "https://telegra.ph/POLITIKA-KONFIDENCIALNOSTI-08-12-99"
 TERMS_OF_SERVICE_URL = "https://telegra.ph/PUBLICHNAYA-OFERTA-08-12-15"
 SUPPORT_URL = "https://t.me/kufiBY"
-SUPPORT_HANDLE = "@KufiBY"
 
 HELP_TEXT = (
     "💡 <b>Как пользоваться</b>\n\n"
@@ -117,7 +116,7 @@ def home_text(user: dict | None, *, is_new: bool) -> str:
     bell = "🔔 Вкл" if active else "🔕 Пауза"
     cat = category_label(user.get("product_category"))
     line1 = f"{bell} · {cat} · {models_n} {_plural_models(models_n)}"
-    line2 = f"до {format_price(max_p)} · {city_label(user.get('city'))}"
+    line2 = f"до {format_price(max_p)} · {user_city_label(user)}"
     if is_phones_category(user.get("product_category")):
         mem = (user.get("memory_volumes") or list(DEFAULT_MEMORY_VOLUMES))
         mem_txt = ", ".join(format_memory_volume(v, short=True) for v in mem)
@@ -291,21 +290,61 @@ def memory_keyboard(user: dict | None) -> InlineKeyboardMarkup:
 
 
 def city_screen_text(user: dict | None) -> str:
-    current = city_label((user or {}).get("city"))
-    return f"📍 <b>Город</b>\n\nСейчас: <b>{current}</b>"
+    current = user_city_label(user)
+    return (
+        f"📍 <b>Город</b>\n\n"
+        f"Сейчас: <b>{current}</b>\n\n"
+        "Введите название или выберите область целиком."
+    )
+
+
+def city_typed_prompt_text() -> str:
+    return (
+        "📍 <b>Город</b>\n\n"
+        "Введите название города или населённого пункта, например "
+        "<code>Барановичи</code> или <code>Бобруйск</code>."
+    )
+
+
+def city_pick_keyboard(options: list[dict]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for idx, opt in enumerate(options):
+        label = str(opt.get("label") or "")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"city:pick:{idx}",
+                )
+            ]
+        )
+    rows.append(back_row())
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _region_selected(user: dict | None, rgn: int) -> bool:
+    if not user:
+        return False
+    return int(user.get("city_rgn") or 0) == rgn and user.get("city_ar") is None
 
 
 def city_keyboard(user: dict | None) -> InlineKeyboardMarkup:
-    selected_slug = normalize_city((user or {}).get("city"))
     rows: list[list[InlineKeyboardButton]] = []
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⌨️ Ввести город",
+                callback_data="nav:city:typed",
+            )
+        ]
+    )
     row: list[InlineKeyboardButton] = []
-    for slug in CITY_ORDER:
-        label = CITY_LABELS[slug]
-        mark = " ✅" if slug == selected_slug else ""
+    for rgn, label in QUICK_RGN_BUTTONS:
+        mark = " ✅" if _region_selected(user, rgn) else ""
         row.append(
             InlineKeyboardButton(
                 text=f"{label}{mark}",
-                callback_data=f"city:t:{slug}",
+                callback_data=f"city:rgn:{rgn}",
             )
         )
         if len(row) == 2:

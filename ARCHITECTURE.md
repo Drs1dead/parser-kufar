@@ -7,7 +7,8 @@ main.py              # Запуск: Telegram polling + фоновый poller
 poller.py            # Цикл: Kufar → фильтры → отправка
 user_matching.py     # Какие объявления подходят пользователю
 kufar_fetch.py       # Запросы к API Kufar
-kufar_catalog.py     # Фасеты cat/phm/ppm/ot/rgn по категории
+kufar_catalog.py     # Фасеты cat/phm/ppm/ot/rgn/ar по категории
+kufar_geo.py         # Поиск населённых пунктов (data/kufar_geo.json)
 product_catalog.py   # Категории и списки моделей
 filters.py           # Правила отбора объявлений
 db.py                # SQLite
@@ -29,7 +30,7 @@ handlers/
 
 ## Поток рассылки
 
-1. `poller` берёт due-пользователей. При `KUFAR_USE_CATALOG` группирует их по ключу `категория + город + модели + память` (память только у смартфонов) и качает Kufar **один раз на ключ**. Текстовый `query` не используем: на Kufar это полнотекст, а не фильтр модели.
+1. `poller` берёт due-пользователей. При `KUFAR_USE_CATALOG` группирует их по ключу `категория + rgn + ar + модели + память` (память только у смартфонов) и качает Kufar **один раз на ключ** (с TTL-кэшем ~18 с). Текстовый `query` не используем: на Kufar это полнотекст, а не фильтр модели.
 2. Для каждого due — `match_ads_for_user` по батчу его ключа. При catalog: без `smart_filtering` (кроме VIP «идеальные»), магазины (`company_ad`) и тонкий антихлам в заголовке; модель (и память у смартфонов) ещё раз проверяются локально.
 3. Новые объявления отправляются в Telegram (`formatter.format_ad`).
 

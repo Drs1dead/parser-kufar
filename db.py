@@ -21,7 +21,7 @@ from config import (
     SQLITE_SYNCHRONOUS,
     VIP_SUBSCRIPTION_DAYS,
 )
-from kufar_catalog import CITY_RGN, DEFAULT_CITY, normalize_city
+from kufar_catalog import CITY_RGN, CITY_LABELS, DEFAULT_CITY, normalize_city, RGN_TO_SLUG
 from product_catalog import (
     DEFAULT_CATEGORY,
     DEVICE_CATALOG_SET,
@@ -82,7 +82,8 @@ def _generate_referral_code() -> str:
 _USER_SELECT = (
     "chat_id, active, role, vip_until, max_price, keywords, sent_count, created_at, "
     "vip_feed_mode, username, memory_volumes, referral_code, referred_by, "
-    "poll_last_vip, poll_last_regular, city, product_category"
+    "poll_last_vip, poll_last_regular, city, product_category, "
+    "city_rgn, city_ar, city_label"
 )
 
 def _row_to_user(row: tuple) -> dict:
@@ -104,6 +105,17 @@ def _row_to_user(row: tuple) -> dict:
         "poll_last_regular": int(row[14] or 0) if len(row) > 14 else 0,
         "city": normalize_city(row[15] if len(row) > 15 else None),
         "product_category": normalize_category(row[16] if len(row) > 16 else None),
+        "city_rgn": int(row[17] if len(row) > 17 and row[17] is not None else CITY_RGN[DEFAULT_CITY]),
+        "city_ar": (
+            int(row[18])
+            if len(row) > 18 and row[18] is not None
+            else None
+        ),
+        "city_label": (
+            (row[19] or "").strip()
+            if len(row) > 19 and row[19]
+            else CITY_LABELS[DEFAULT_CITY]
+        ),
     }
 
 
@@ -313,6 +325,21 @@ def init_db() -> None:
         _execute(
             f"ALTER TABLE users ADD COLUMN product_category TEXT NOT NULL DEFAULT '{DEFAULT_CATEGORY}'"
         )
+    cols = _table_columns("users")
+    geo_added = False
+    if "city_rgn" not in cols:
+        _execute("ALTER TABLE users ADD COLUMN city_rgn INTEGER NOT NULL DEFAULT 7")
+        geo_added = True
+    if "city_ar" not in cols:
+        _execute("ALTER TABLE users ADD COLUMN city_ar INTEGER")
+        geo_added = True
+    if "city_label" not in cols:
+        _execute(
+            "ALTER TABLE users ADD COLUMN city_label TEXT NOT NULL DEFAULT 'Минск'"
+        )
+        geo_added = True
+    if geo_added:
+        _backfill_city_geo_from_slug()
     _executescript(
         """
         CREATE TABLE IF NOT EXISTS referrals (
@@ -351,6 +378,15 @@ def init_db() -> None:
     if stale:
         log.info("market_prices pruned unknown models deleted=%s", stale)
     checkpoint_wal()
+
+
+def _backfill_city_geo_from_slug() -> None:
+    for slug, rgn in CITY_RGN.items():
+        label = CITY_LABELS[slug]
+        _execute(
+            "UPDATE users SET city_rgn = ?, city_ar = NULL, city_label = ? WHERE city = ?",
+            (rgn, label, slug),
+        )
 
 
 def _backfill_referral_codes() -> None:
@@ -525,8 +561,33 @@ def update_city(chat_id: int, city: str) -> str:
         cur = _execute("SELECT city FROM users WHERE chat_id = ?", (chat_id,))
         row = cur.fetchone()
         return normalize_city(row[0] if row else None)
-    _execute("UPDATE users SET city = ? WHERE chat_id = ?", (slug, chat_id))
+    rgn = CITY_RGN[slug]
+    label = CITY_LABELS[slug]
+    update_geo(chat_id, rgn, None, label)
     return slug
+
+
+def update_geo(
+    chat_id: int,
+    rgn: int,
+    ar: int | None,
+    label: str,
+) -> dict[str, object]:
+    rgn_i = int(rgn)
+    ar_val = int(ar) if ar is not None else None
+    label_clean = (label or "").strip()
+    slug = RGN_TO_SLUG.get(rgn_i, DEFAULT_CITY)
+    _execute(
+        "UPDATE users SET city_rgn = ?, city_ar = ?, city_label = ?, city = ? "
+        "WHERE chat_id = ?",
+        (rgn_i, ar_val, label_clean, slug, chat_id),
+    )
+    return {
+        "city_rgn": rgn_i,
+        "city_ar": ar_val,
+        "city_label": label_clean,
+        "city": slug,
+    }
 
 
 def update_product_category(chat_id: int, category: str, *, reset_keywords: bool = True) -> str:
@@ -688,10 +749,6 @@ def increment_sent(chat_id: int) -> None:
         "UPDATE users SET sent_count = sent_count + 1 WHERE chat_id = ?",
         (chat_id,),
     )
-
-
-def save_market_price(link: str, device_key: str, price: int) -> None:
-    save_market_prices([(link, device_key, price)])
 
 
 def save_market_prices(rows: list[tuple[str, str, int]]) -> None:

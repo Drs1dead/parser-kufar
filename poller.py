@@ -18,10 +18,12 @@ from aiogram.types import InputMediaPhoto
 
 from config import (
     CHECK_INTERVAL,
+    FETCH_CACHE_TTL_SECONDS,
     FIRST_RUN_LIMIT,
     KUFAR_CATALOG_COMPARE,
     KUFAR_USE_CATALOG,
     MARKET_DISCOUNT_THRESHOLD,
+    MAX_AD_PHOTOS,
     REGULAR_CHECK_INTERVAL,
     VIP_CHECK_INTERVAL,
 )
@@ -58,6 +60,7 @@ from user_matching import VIP_SPECIAL_MAX_PRICE, match_ads_for_user
 log = logging.getLogger("kufar_bot.poller")
 
 first_run_notified: set[int] = set()
+_fetch_cache: dict[FetchKey, tuple[float, list[dict]]] = {}
 
 VIP_EXPIRED_MSG = (
     "⭐ <b>VIP закончился</b>\n\n"
@@ -169,6 +172,7 @@ async def _send_ad(
     market_avg_price: int | None = None,
     below_market: bool = False,
     ideal_feed: bool = False,
+    include_photos: bool = False,
 ) -> tuple[bool, bool]:
     """(доставлено, пользователь отключён — блокировка бота)."""
     text = truncate_ad_caption(
@@ -180,6 +184,8 @@ async def _send_ad(
         )
     )
     photos = [p for p in (ad.get("photo_urls") or []) if isinstance(p, str) and p.strip()]
+    if include_photos and photos:
+        photos = photos[:MAX_AD_PHOTOS]
 
     async def _deliver_text() -> None:
         await bot.send_message(chat_id, text, disable_web_page_preview=False)
@@ -191,12 +197,12 @@ async def _send_ad(
                 caption=text if i == 0 else None,
                 parse_mode=ParseMode.HTML if i == 0 else None,
             )
-            for i, photo in enumerate(photos[:5])
+            for i, photo in enumerate(photos)
         ]
         await bot.send_media_group(chat_id=chat_id, media=media)
 
     async def _deliver() -> None:
-        if photos:
+        if include_photos and photos:
             await _deliver_media()
             return
         await _deliver_text()
@@ -219,7 +225,7 @@ async def _send_ad(
         return False, True
     except TelegramBadRequest as exc:
         log.warning("send bad_request chat_id=%s: %s", chat_id, exc)
-        if photos:
+        if photos and include_photos:
             try:
                 await _deliver_text()
                 return True, False
@@ -318,6 +324,7 @@ async def _process_user(
             market_avg_price=market_avg if is_vip else None,
             below_market=below_market,
             ideal_feed=ideal_mode,
+            include_photos=is_vip,
         )
         if ok:
             mark_seen(chat_id, link)
@@ -356,22 +363,42 @@ async def _fetch_catalog_groups(
     keys = list(groups.keys())
     if not keys:
         return {}, []
-    connector = aiohttp.TCPConnector(limit=8)
-    async with aiohttp.ClientSession(
-        headers=DEFAULT_HEADERS, connector=connector
-    ) as session:
-        batches = await asyncio.gather(
-            *(
-                fetch_ads_for_key(category, city, models, memories, session=session)
-                for category, city, models, memories in keys
-            )
-        )
+    now = time.time()
     ads_by_key: dict[FetchKey, list[dict]] = {}
+    keys_to_fetch: list[FetchKey] = []
+    for key in keys:
+        cached = _fetch_cache.get(key)
+        if cached and now - cached[0] < FETCH_CACHE_TTL_SECONDS:
+            ads_by_key[key] = cached[1]
+        else:
+            keys_to_fetch.append(key)
+
+    if keys_to_fetch:
+        connector = aiohttp.TCPConnector(limit=8)
+        async with aiohttp.ClientSession(
+            headers=DEFAULT_HEADERS, connector=connector
+        ) as session:
+            batches = await asyncio.gather(
+                *(
+                    fetch_ads_for_key(
+                        category,
+                        rgn,
+                        ar,
+                        models,
+                        memories,
+                        session=session,
+                    )
+                    for category, rgn, ar, models, memories in keys_to_fetch
+                )
+            )
+        for key, ads in zip(keys_to_fetch, batches):
+            _fetch_cache[key] = (now, ads)
+            ads_by_key[key] = ads
+
     merged: list[dict] = []
     seen_links: set[str] = set()
-    for key, ads in zip(keys, batches):
-        ads_by_key[key] = ads
-        for ad in ads:
+    for key in keys:
+        for ad in ads_by_key.get(key) or []:
             link = ad.get("link")
             if not isinstance(link, str) or not link or link in seen_links:
                 continue
@@ -476,7 +503,7 @@ async def poller(bot: Bot) -> None:
                 log.debug("poll skip — no due subscribers")
             else:
                 # VIP отдельно: не ждёт fetch ключей обычных пользователей.
-                await _dispatch_due(bot, vip_due, compare_catalog=True)
+                await _dispatch_due(bot, vip_due, compare_catalog=False)
                 await _dispatch_due(bot, regular_due)
         except Exception:
             log_exception(log, "poll cycle failed")

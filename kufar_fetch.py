@@ -368,15 +368,16 @@ def _catalog_request_params(facets: dict[str, str]) -> dict[str, str]:
 
 async def fetch_ads_for_key(
     category: str,
-    city: str,
+    rgn: int,
+    ar: int | None,
     models: list[str] | tuple[str, ...],
     memories: list[str] | tuple[str, ...],
     *,
     session: aiohttp.ClientSession | None = None,
 ) -> list[dict]:
-    """Листинг по ключу: категория + город + модели (+ память у смартфонов)."""
+    """Листинг по ключу: категория + rgn/ar + модели (+ память у смартфонов)."""
     facet_sets = catalog_search_params(
-        city, models, memories, category=category
+        int(rgn), ar, models, memories, category=category
     )
     if not facet_sets:
         return []
@@ -393,9 +394,10 @@ async def fetch_ads_for_key(
             raw_ads.extend(batch)
         ads = _normalize_raw_ads(raw_ads)
         log.debug(
-            "kufar catalog cat=%s city=%s models=%s mem=%s raw=%d normalized=%d requests=%d",
+            "kufar catalog cat=%s rgn=%s ar=%s models=%s mem=%s raw=%d normalized=%d requests=%d",
             category,
-            city,
+            rgn,
+            ar,
             len(models),
             list(memories),
             len(raw_ads),

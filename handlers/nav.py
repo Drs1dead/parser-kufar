@@ -12,7 +12,8 @@ from config import (
     MAX_PRICE_PRESETS,
     MEMORY_VOLUME_OPTIONS,
 )
-from kufar_catalog import CITY_RGN
+from kufar_catalog import QUICK_RGN_BUTTONS
+from kufar_geo import search_places
 from product_catalog import is_phones_category
 from db import (
     get_user,
@@ -20,6 +21,7 @@ from db import (
     set_active,
     set_vip,
     update_city,
+    update_geo,
     update_max_price,
     update_memory_volumes,
     update_vip_feed_mode,
@@ -29,7 +31,9 @@ from bot_ui import (
     back_keyboard,
     back_row,
     city_keyboard,
+    city_pick_keyboard,
     city_screen_text,
+    city_typed_prompt_text,
     custom_price_prompt_text,
     help_keyboard,
     home_keyboard,
@@ -58,7 +62,7 @@ from handlers.helpers import (
     safe_edit_message,
     sync_username_from_callback,
 )
-from handlers.states import CustomPriceState, PromoCodeState
+from handlers.states import CityInputState, CustomPriceState, PromoCodeState
 from logging_setup import log_exception
 
 log = logging.getLogger(__name__)
@@ -120,6 +124,74 @@ async def on_memory_toggle(cb: CallbackQuery) -> None:
     )
 
 
+@router.callback_query(lambda c: (c.data or "").startswith("city:rgn:"))
+async def on_city_region(cb: CallbackQuery, state: FSMContext) -> None:
+    if cb.message is None:
+        await cb.answer()
+        return
+    user = await require_user_cb(cb)
+    if user is None:
+        return
+    chat_id = cb.message.chat.id
+    raw = (cb.data or "")[9:]
+    if not raw.isdigit():
+        await cb.answer("Неизвестный регион", show_alert=True)
+        return
+    rgn = int(raw)
+    label = next((lbl for rg, lbl in QUICK_RGN_BUTTONS if rg == rgn), "")
+    if not label:
+        await cb.answer("Неизвестный регион", show_alert=True)
+        return
+    await state.clear()
+    geo = update_geo(chat_id, rgn, None, label)
+    user.update(geo)
+    await flush_screen(
+        cb,
+        city_screen_text(user),
+        reply_markup=city_keyboard(user),
+        notice="📍 Сохранено",
+    )
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("city:pick:"))
+async def on_city_pick(cb: CallbackQuery, state: FSMContext) -> None:
+    if cb.message is None:
+        await cb.answer()
+        return
+    user = await require_user_cb(cb)
+    if user is None:
+        return
+    chat_id = cb.message.chat.id
+    raw = (cb.data or "")[10:]
+    if not raw.isdigit():
+        await cb.answer("Неизвестный вариант", show_alert=True)
+        return
+    idx = int(raw)
+    data = await state.get_data()
+    options = data.get("city_options") or []
+    if idx < 0 or idx >= len(options):
+        await cb.answer("Список устарел — введите город снова", show_alert=True)
+        return
+    opt = options[idx]
+    geo = update_geo(
+        chat_id,
+        int(opt["rgn"]),
+        int(opt["ar"]),
+        str(opt.get("label") or ""),
+    )
+    user.update(geo)
+    await state.clear()
+    await flush_screen(
+        cb,
+        home_text(user, is_new=False),
+        reply_markup=home_keyboard(
+            is_admin=is_admin(cb.from_user.id if cb.from_user else 0),
+            user=user,
+        ),
+        notice=f"📍 {geo['city_label']}",
+    )
+
+
 @router.callback_query(lambda c: (c.data or "").startswith("city:t:"))
 async def on_city_select(cb: CallbackQuery) -> None:
     if cb.message is None:
@@ -130,6 +202,8 @@ async def on_city_select(cb: CallbackQuery) -> None:
         return
     chat_id = cb.message.chat.id
     slug = (cb.data or "")[7:]
+    from kufar_catalog import CITY_RGN
+
     if slug not in CITY_RGN:
         await cb.answer("Неизвестный город", show_alert=True)
         return
@@ -273,6 +347,15 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
             )
             return
 
+        if data == "nav:city:typed":
+            await state.set_state(CityInputState.waiting_text)
+            await flush_screen(
+                cb,
+                city_typed_prompt_text(),
+                reply_markup=back_keyboard(),
+            )
+            return
+
         if data == "nav:price:custom":
             if not is_vip_user(user):
                 await cb.answer("Только для VIP", show_alert=True)
@@ -350,6 +433,69 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
     except Exception:
         log_exception(log, "nav error data=%s", data)
         await safe_cb_answer(cb, "Не удалось обновить меню", show_alert=True)
+
+
+@router.message(CityInputState.waiting_text, F.text, ~F.text.startswith("/"))
+async def on_city_text(msg: Message, state: FSMContext) -> None:
+    chat_id = msg.chat.id
+    user = load_user_from_message(msg)
+    if user is None:
+        await state.clear()
+        await msg.answer("Сначала нажми <code>/start</code>.", parse_mode=ParseMode.HTML)
+        return
+
+    text = (msg.text or "").strip()
+    if len(text) < 2:
+        await msg.answer(
+            "Введите не менее 2 символов, например <code>Брест</code>.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    matches = search_places(text, limit=5)
+    if not matches:
+        await msg.answer(
+            "Ничего не найдено. Попробуйте другое название или выберите область в меню.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=city_keyboard(user),
+        )
+        return
+
+    if len(matches) == 1:
+        place = matches[0]
+        geo = update_geo(chat_id, place.rgn, place.ar, place.label)
+        user.update(geo)
+        await state.clear()
+        uid = actor_user_id(msg)
+        await msg.answer(
+            home_text(user, is_new=False),
+            reply_markup=home_keyboard(is_admin=is_admin(uid), user=user),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if len(matches) <= 3:
+        options = [
+            {
+                "label": f"{p.label} ({p.region_label})",
+                "rgn": p.rgn,
+                "ar": p.ar,
+            }
+            for p in matches[:3]
+        ]
+        await state.update_data(city_options=options)
+        await msg.answer(
+            "Найдено несколько вариантов — выберите:",
+            reply_markup=city_pick_keyboard(options),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    await msg.answer(
+        "Слишком много совпадений — уточните название.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=city_keyboard(user),
+    )
 
 
 @router.message(CustomPriceState.waiting_price, F.text, ~F.text.startswith("/"))

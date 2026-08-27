@@ -138,13 +138,6 @@ WATCH_MODELS: tuple[str, ...] = (
     "apple watch ultra 2",
 )
 
-MODELS_BY_CATEGORY: dict[str, tuple[str, ...]] = {
-    CAT_PHONES: PHONE_MODELS,
-    CAT_LAPTOPS: LAPTOP_MODELS,
-    CAT_TABLETS: TABLET_MODELS,
-    CAT_WATCHES: WATCH_MODELS,
-}
-
 DEVICE_CATALOG: tuple[str, ...] = (
     PHONE_MODELS + LAPTOP_MODELS + TABLET_MODELS + WATCH_MODELS
 )
@@ -161,10 +154,6 @@ def normalize_category(value: str | None) -> str:
 
 def category_label(value: str | None) -> str:
     return CATEGORY_LABELS[normalize_category(value)]
-
-
-def models_for_category(value: str | None) -> tuple[str, ...]:
-    return MODELS_BY_CATEGORY[normalize_category(value)]
 
 
 def is_phones_category(value: str | None) -> bool:

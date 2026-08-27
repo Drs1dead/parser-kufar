@@ -36,17 +36,23 @@ class CatalogParamsTests(unittest.TestCase):
         self.assertEqual(city_rgn("grodno"), 3)
         self.assertEqual(city_rgn(None), CITY_RGN[DEFAULT_CITY])
         self.assertEqual(
-            catalog_search_params("gomel", ["iphone 15"], ["256"])[0]["rgn"],
+            catalog_search_params(2, None, ["iphone 15"], ["256"])[0]["rgn"],
             "2",
         )
         self.assertEqual(
-            catalog_search_params("grodno", ["iphone 15"], ["256"])[0]["rgn"],
+            catalog_search_params(3, None, ["iphone 15"], ["256"])[0]["rgn"],
             "3",
         )
 
+    def test_ar_facet_for_settlement(self) -> None:
+        rows = catalog_search_params(1, 37, ["iphone 15"], ["256"])
+        self.assertEqual(rows[0]["rgn"], "1")
+        self.assertEqual(rows[0]["ar"], "37")
+
     def test_iphone_15_and_pro_256_one_request(self) -> None:
         rows = catalog_search_params(
-            "minsk",
+            7,
+            None,
             ["iphone 15", "iphone 15 pro"],
             ["256"],
         )
@@ -62,18 +68,19 @@ class CatalogParamsTests(unittest.TestCase):
         self.assertNotIn("query", row)
 
     def test_several_memory_volumes_or(self) -> None:
-        rows = catalog_search_params("minsk", ["iphone 15"], ["128", "256"])
+        rows = catalog_search_params(7, None, ["iphone 15"], ["128", "256"])
         self.assertEqual(rows[0]["ppm"], "v.or:20,25")
 
     def test_512_plus_includes_tb(self) -> None:
-        rows = catalog_search_params("minsk", ["iphone 15"], ["512+"])
+        rows = catalog_search_params(7, None, ["iphone 15"], ["512+"])
         ppm = rows[0]["ppm"]
         self.assertIn("30", ppm)
         self.assertIn("35", ppm)
 
     def test_unmapped_model_skipped_no_query(self) -> None:
         rows = catalog_search_params(
-            "minsk",
+            7,
+            None,
             ["iphone 15", "not-a-real-phone"],
             ["64"],
         )
@@ -81,14 +88,14 @@ class CatalogParamsTests(unittest.TestCase):
         self.assertIn("phm", rows[0])
         self.assertNotIn("query", rows[0])
         self.assertEqual(
-            catalog_search_params("minsk", ["not-a-real-phone"], ["64"]),
+            catalog_search_params(7, None, ["not-a-real-phone"], ["64"]),
             [],
         )
 
     def test_full_catalog_one_phm_request(self) -> None:
         from product_catalog import PHONE_MODELS
 
-        rows = catalog_search_params("minsk", PHONE_MODELS, ["256"])
+        rows = catalog_search_params(7, None, PHONE_MODELS, ["256"])
         self.assertEqual(len(rows), 1)
         self.assertNotIn("query", rows[0])
         self.assertTrue(rows[0]["phm"].startswith("v.or:"))
@@ -96,7 +103,8 @@ class CatalogParamsTests(unittest.TestCase):
 
     def test_laptops_apple_silicon_no_query_no_ppm(self) -> None:
         rows = catalog_search_params(
-            "minsk",
+            7,
+            None,
             ["macbook air m1", "macbook pro 14"],
             ["256"],
             category="laptops",
@@ -112,7 +120,8 @@ class CatalogParamsTests(unittest.TestCase):
 
     def test_tablets_apple_no_query_no_ppm(self) -> None:
         rows = catalog_search_params(
-            "minsk",
+            7,
+            None,
             ["ipad air 4", "ipad pro 11"],
             ["256"],
             category="tablets",
@@ -128,7 +137,8 @@ class CatalogParamsTests(unittest.TestCase):
 
     def test_watches_apple_brand_no_query(self) -> None:
         rows = catalog_search_params(
-            "minsk",
+            7,
+            None,
             ["apple watch series 7"],
             ["64"],
             category="watches",
@@ -151,27 +161,44 @@ class FetchKeyTests(unittest.TestCase):
             "memory_volumes": ["256"],
         }
         self.assertEqual(fetch_key_for_user(a), fetch_key_for_user(b))
-        self.assertEqual(fetch_key_for_user(a)[1], DEFAULT_CITY)
+        self.assertEqual(fetch_key_for_user(a)[1], 7)
         self.assertEqual(fetch_key_for_user(a)[0], "phones")
 
     def test_same_model_different_city_two_keys(self) -> None:
         minsk = {
             "keywords": ["iphone 15"],
             "memory_volumes": ["256"],
-            "city": "minsk",
+            "city_rgn": 7,
+            "city_ar": None,
         }
         brest = {
             "keywords": ["iphone 15"],
             "memory_volumes": ["256"],
-            "city": "brest",
+            "city_rgn": 1,
+            "city_ar": None,
         }
         key_m = fetch_key_for_user(minsk)
         key_b = fetch_key_for_user(brest)
         self.assertEqual(key_m[2], key_b[2])
         self.assertEqual(key_m[3], key_b[3])
-        self.assertEqual(key_m[1], "minsk")
-        self.assertEqual(key_b[1], "brest")
+        self.assertEqual(key_m[1], 7)
+        self.assertEqual(key_b[1], 1)
         self.assertNotEqual(key_m, key_b)
+
+    def test_settlement_ar_differs_from_region_only(self) -> None:
+        region = {
+            "keywords": ["iphone 15"],
+            "memory_volumes": ["256"],
+            "city_rgn": 1,
+            "city_ar": None,
+        }
+        town = {
+            "keywords": ["iphone 15"],
+            "memory_volumes": ["256"],
+            "city_rgn": 1,
+            "city_ar": 37,
+        }
+        self.assertNotEqual(fetch_key_for_user(region), fetch_key_for_user(town))
 
     def test_group_two_users_one_key(self) -> None:
         users = [
@@ -200,7 +227,7 @@ class FetchKeyTests(unittest.TestCase):
         key_w = fetch_key_for_user(watches)
         self.assertEqual(key_p[0], "phones")
         self.assertEqual(key_w[0], "watches")
-        self.assertEqual(key_w[3], ())
+        self.assertEqual(key_w[4], ())
         self.assertNotEqual(key_p, key_w)
 
 

@@ -2,8 +2,8 @@ import re
 from html import escape
 from datetime import datetime, timezone
 
-from config import DISPLAY_TZ, format_local_datetime, format_memory_volume, format_price
-from kufar_catalog import city_label
+from config import DISPLAY_TZ, AD_DESCRIPTION_MAX_CHARS, format_local_datetime, format_memory_volume, format_price
+from kufar_catalog import user_city_label
 from product_catalog import category_label
 
 _CAPTION_SAFE_MAX = 980
@@ -77,7 +77,10 @@ def format_ad(
 
     location = _esc(ad.get("location") or "")
     summary = _esc((ad.get("summary") or "").strip())
-    description = _esc(ad.get("description") or "")
+    desc_raw = (ad.get("description") or "").strip()
+    if len(desc_raw) > AD_DESCRIPTION_MAX_CHARS:
+        desc_raw = desc_raw[: AD_DESCRIPTION_MAX_CHARS - 1].rstrip() + "…"
+    description = _esc(desc_raw)
     link = ad.get("link") or ""
     listed = _format_list_time(ad.get("list_time"))
 
@@ -161,7 +164,7 @@ def format_status(user: dict) -> str:
         f"💰 <b>Цена до:</b> {format_price(max_price)}\n"
         f"📂 <b>Категория:</b> {_esc(category_label(user.get('product_category')))}\n"
         f"💾 <b>Память:</b> {_esc(mem)}\n"
-        f"📍 <b>Город:</b> {_esc(city_label(user.get('city')))}\n"
+        f"📍 <b>Город:</b> {_esc(user_city_label(user))}\n"
         f"📱 <b>Модели:</b> {_esc(kw)}\n"
         f"📨 <b>Отправлено объявлений:</b> {sent}"
         f"{vip_feed}"

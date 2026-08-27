@@ -9,6 +9,10 @@ class CustomPriceState(StatesGroup):
     waiting_price = State()
 
 
+class CityInputState(StatesGroup):
+    waiting_text = State()
+
+
 class AdminPromoState(StatesGroup):
     waiting_random = State()
     waiting_manual = State()
