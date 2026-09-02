@@ -197,7 +197,7 @@ def price_presets_keyboard(user: dict | None) -> InlineKeyboardMarkup:
     if row:
         rows.append(row)
     if is_vip_user(user):
-        rows.append([InlineKeyboardButton(text="Своя цена", callback_data="nav:price:custom")])
+        rows.append([InlineKeyboardButton(text="🎯 Своя цена", callback_data="nav:price:custom")])
     rows.append(back_row())
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

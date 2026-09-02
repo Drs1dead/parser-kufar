@@ -420,7 +420,7 @@ async def _process_user(
             log_exception(log, "first-run digest failed chat_id=%s: %s", chat_id, exc)
 
 
-async def _batch_enrich_ideal_descriptions(
+async def _batch_enrich_vip_descriptions(
     due: list[dict],
     groups: dict[FetchKey, list[dict]],
     ads_by_key: dict[FetchKey, list[dict]],
@@ -428,7 +428,7 @@ async def _batch_enrich_ideal_descriptions(
     *,
     session: aiohttp.ClientSession,
 ) -> None:
-    """Один HTTP-проход на link для VIP «идеальные» в batch dispatch."""
+    """Один HTTP-проход на link для VIP: описание в карточке рассылки."""
     by_link: dict[str, dict] = {}
     for key, group_users in groups.items():
         if key[0] == SOURCE_AVITO:
@@ -437,7 +437,7 @@ async def _batch_enrich_ideal_descriptions(
         if not ads:
             continue
         for user in group_users:
-            if user.get("role") != "vip" or (user.get("vip_feed_mode") or "normal") != "ideal":
+            if user.get("role") != "vip":
                 continue
             matched = match_ads_for_user(user, ads, market_cache)
             if not matched:
@@ -517,7 +517,7 @@ async def _dispatch_due(
             ads_by_key, merged = await _fetch_catalog_groups(groups, session=session)
             await asyncio.to_thread(_ingest_market_prices_from_ads, merged)
             market_cache: dict[str, int | None] = {}
-            await _batch_enrich_ideal_descriptions(
+            await _batch_enrich_vip_descriptions(
                 due, groups, ads_by_key, market_cache, session=session
             )
             log.info(

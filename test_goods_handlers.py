@@ -54,7 +54,7 @@ class HomeUiTests(unittest.TestCase):
         text = home_text(user, is_new=False)
         self.assertIn("<b>Kufi</b>", text)
         self.assertIn("Kufar", text)
-        self.assertIn("уведомления вкл.", text)
+        self.assertIn("🔔 вкл.", text)
         self.assertIn("Смартфоны", text)
         self.assertNotIn("поиск телефонов", text)
 
@@ -62,9 +62,9 @@ class HomeUiTests(unittest.TestCase):
         user = {"active": True, "product_category": "phones"}
         kb = home_keyboard(is_admin=False, user=user)
         labels = [[btn.text for btn in row] for row in kb.inline_keyboard]
-        self.assertIn(["VIP", "Помощь"], labels)
-        self.assertIn(["Товары", "Цена", "Память"], labels)
-        self.assertIn(["Страна", "Город"], labels)
+        self.assertIn(["⭐ VIP", "💡 Помощь"], labels)
+        self.assertIn(["📱 Товары", "💰 Цена", "💾 Память"], labels)
+        self.assertIn(["🌍 Страна", "📍 Город"], labels)
 
 
 class ModelLabelTests(unittest.TestCase):
