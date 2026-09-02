@@ -6,7 +6,7 @@ import string
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from config import (
     DB_PATH as DB_PATH_OVERRIDE,
@@ -17,6 +17,7 @@ from config import (
     map_max_price_on_country_switch,
     PRICE_DATA_RETENTION_DAYS,
     REFERRAL_VIP_DAYS_PER_FRIEND,
+    REGULAR_MAX_KEYWORDS,
     SEEN_ADS_RETENTION_DAYS,
     SQLITE_BUSY_TIMEOUT,
     SQLITE_SYNCHRONOUS,
@@ -72,6 +73,37 @@ def _norm_memory_volumes(volumes: list[str] | None) -> list[str]:
 
 def _memory_csv(volumes: list[str]) -> str:
     return ",".join(_norm_memory_volumes(volumes))
+
+
+def _keywords_csv(keywords: list[str]) -> str:
+    cleaned = [k.strip().lower() for k in keywords if k and str(k).strip()]
+    # preserve order, unique
+    out: list[str] = []
+    for k in cleaned:
+        if k not in out:
+            out.append(k)
+    return ",".join(out)
+
+
+def _trim_keywords_for_regular(keywords: list[str] | None) -> list[str]:
+    cleaned = [k.strip().lower() for k in (keywords or []) if k and str(k).strip()]
+    out: list[str] = []
+    for k in cleaned:
+        if k not in out:
+            out.append(k)
+        if len(out) >= REGULAR_MAX_KEYWORDS:
+            break
+    return out
+
+
+def _regular_search_limits_sql(
+    keywords: list[str] | None,
+) -> tuple[str, str]:
+    """keywords CSV + memory CSV for demoted regular user."""
+    return (
+        _keywords_csv(_trim_keywords_for_regular(keywords)),
+        _memory_csv(list(DEFAULT_MEMORY_VOLUMES)),
+    )
 
 
 def _parse_memory_csv(raw: str | None) -> list[str]:
@@ -410,6 +442,24 @@ def init_db() -> None:
             created_at        INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_chat_id);
+
+        CREATE TABLE IF NOT EXISTS vip_payments (
+            order_id     TEXT PRIMARY KEY,
+            chat_id      INTEGER NOT NULL,
+            plan         TEXT NOT NULL,
+            days         INTEGER NOT NULL,
+            amount_usd   REAL NOT NULL,
+            amount_rub   TEXT NOT NULL,
+            payment_id   TEXT,
+            pay_url      TEXT NOT NULL DEFAULT '',
+            status       TEXT NOT NULL DEFAULT 'pending',
+            created_at   INTEGER NOT NULL,
+            paid_at      INTEGER
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_vip_payments_payment_id
+            ON vip_payments(payment_id) WHERE payment_id IS NOT NULL AND payment_id != '';
+        CREATE INDEX IF NOT EXISTS idx_vip_payments_status ON vip_payments(status);
+        CREATE INDEX IF NOT EXISTS idx_vip_payments_chat ON vip_payments(chat_id);
         """
     )
     _backfill_referral_codes()
@@ -530,23 +580,38 @@ def get_user(chat_id: int) -> Optional[dict]:
     user = _row_to_user(row)
     now = int(time.time())
     if user.get("role") == "vip" and 0 < int(user.get("vip_until") or 0) < now:
-        memory = _vip_expiry_memory_sql()
+        kw_csv, memory = _regular_search_limits_sql(user.get("keywords"))
         _execute(
             "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
-            "memory_volumes = ? WHERE chat_id = ?",
-            (memory, chat_id),
+            "keywords = ?, memory_volumes = ? WHERE chat_id = ?",
+            (kw_csv, memory, chat_id),
         )
         user["role"] = "regular"
         user["vip_until"] = 0
         user["vip_feed_mode"] = "normal"
+        user["keywords"] = _trim_keywords_for_regular(user.get("keywords"))
         user["memory_volumes"] = list(DEFAULT_MEMORY_VOLUMES)
-    elif user.get("role") != "vip" and len(user.get("memory_volumes") or []) > 1:
-        norm = list(DEFAULT_MEMORY_VOLUMES)
-        _execute(
-            "UPDATE users SET memory_volumes = ? WHERE chat_id = ?",
-            (_memory_csv(norm), chat_id),
-        )
-        user["memory_volumes"] = norm
+    elif user.get("role") != "vip":
+        kw = user.get("keywords") or []
+        mem = user.get("memory_volumes") or []
+        need_kw = len(kw) > REGULAR_MAX_KEYWORDS
+        need_mem = len(mem) > 1
+        if need_kw or need_mem:
+            kw_csv, memory = _regular_search_limits_sql(kw)
+            if not need_mem:
+                memory = _memory_csv(mem)
+            if not need_kw:
+                kw_csv = _keywords_csv(kw)
+            _execute(
+                "UPDATE users SET keywords = ?, memory_volumes = ? WHERE chat_id = ?",
+                (kw_csv, memory, chat_id),
+            )
+            user["keywords"] = (
+                _trim_keywords_for_regular(kw) if need_kw else list(kw)
+            )
+            user["memory_volumes"] = (
+                list(DEFAULT_MEMORY_VOLUMES) if need_mem else list(mem)
+            )
     return user
 
 
@@ -1005,6 +1070,111 @@ def set_vip(chat_id: int, *, days: int = VIP_SUBSCRIPTION_DAYS) -> None:
     )
 
 
+def _vip_payment_row(row: tuple | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return {
+        "order_id": row[0],
+        "chat_id": int(row[1]),
+        "plan": row[2],
+        "days": int(row[3]),
+        "amount_usd": float(row[4]),
+        "amount_rub": str(row[5]),
+        "payment_id": row[6] or "",
+        "pay_url": row[7] or "",
+        "status": row[8],
+        "created_at": int(row[9] or 0),
+        "paid_at": int(row[10]) if row[10] is not None else None,
+    }
+
+
+_VIP_PAYMENT_SELECT = (
+    "SELECT order_id, chat_id, plan, days, amount_usd, amount_rub, "
+    "payment_id, pay_url, status, created_at, paid_at FROM vip_payments"
+)
+
+
+def create_vip_payment_row(
+    *,
+    order_id: str,
+    chat_id: int,
+    plan: str,
+    days: int,
+    amount_usd: float,
+    amount_rub: str,
+) -> dict[str, Any]:
+    now = int(time.time())
+    _execute(
+        "INSERT INTO vip_payments "
+        "(order_id, chat_id, plan, days, amount_usd, amount_rub, payment_id, "
+        "pay_url, status, created_at, paid_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, NULL, '', 'pending', ?, NULL)",
+        (order_id, chat_id, plan, days, float(amount_usd), str(amount_rub), now),
+    )
+    row = get_vip_payment_by_order(order_id)
+    assert row is not None
+    return row
+
+
+def update_vip_payment_provider(
+    order_id: str, *, payment_id: str, pay_url: str
+) -> None:
+    _execute(
+        "UPDATE vip_payments SET payment_id = ?, pay_url = ? WHERE order_id = ?",
+        (payment_id, pay_url, order_id),
+    )
+
+
+def get_vip_payment_by_order(order_id: str) -> dict[str, Any] | None:
+    cur = _execute(f"{_VIP_PAYMENT_SELECT} WHERE order_id = ?", (order_id,))
+    return _vip_payment_row(cur.fetchone())
+
+
+def get_vip_payment_by_payment_id(payment_id: str) -> dict[str, Any] | None:
+    pid = (payment_id or "").strip()
+    if not pid:
+        return None
+    cur = _execute(f"{_VIP_PAYMENT_SELECT} WHERE payment_id = ?", (pid,))
+    return _vip_payment_row(cur.fetchone())
+
+
+def mark_vip_payment_status(order_id: str, status: str) -> None:
+    _execute(
+        "UPDATE vip_payments SET status = ? WHERE order_id = ? AND status = 'pending'",
+        (status, order_id),
+    )
+
+
+def mark_vip_payment_paid(
+    order_id: str, *, payment_id: str | None = None
+) -> bool:
+    """Return True if this call transitioned pending → paid."""
+    now = int(time.time())
+    if payment_id:
+        cur = _execute(
+            "UPDATE vip_payments SET status = 'paid', paid_at = ?, payment_id = ? "
+            "WHERE order_id = ? AND status = 'pending'",
+            (now, payment_id, order_id),
+        )
+    else:
+        cur = _execute(
+            "UPDATE vip_payments SET status = 'paid', paid_at = ? "
+            "WHERE order_id = ? AND status = 'pending'",
+            (now, order_id),
+        )
+    return cur.rowcount > 0
+
+
+def list_pending_vip_payments(*, limit: int = 40) -> list[dict[str, Any]]:
+    cur = _execute(
+        f"{_VIP_PAYMENT_SELECT} WHERE status = 'pending' "
+        "AND payment_id IS NOT NULL AND payment_id != '' "
+        "ORDER BY created_at ASC LIMIT ?",
+        (max(1, limit),),
+    )
+    return [r for r in (_vip_payment_row(row) for row in cur.fetchall()) if r]
+
+
 def redeem_promo_code(chat_id: int, code: str) -> tuple[str, int | None]:
     _cleanup_used_up_promo_codes()
     promo = _norm_promo_code(code)
@@ -1131,12 +1301,14 @@ def _regular_defaults_sql_values() -> tuple:
 
 
 def revoke_vip(chat_id: int) -> None:
-    max_price, _keywords, memory = _regular_defaults_sql_values()
+    user = get_user(chat_id)
+    max_price, _default_kw, _memory = _regular_defaults_sql_values()
+    kw_csv, memory = _regular_search_limits_sql((user or {}).get("keywords"))
     _execute(
         "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
-        "max_price = ?, memory_volumes = ? "
+        "max_price = ?, keywords = ?, memory_volumes = ? "
         "WHERE chat_id = ?",
-        (max_price, memory, chat_id),
+        (max_price, kw_csv, memory, chat_id),
     )
 
 
@@ -1148,18 +1320,25 @@ def expire_all_vip() -> list[int]:
     """Снимает VIP у всех с истёкшим сроком. Возвращает chat_id затронутых пользователей."""
     now = int(time.time())
     cur = _execute(
-        "SELECT chat_id FROM users WHERE role = 'vip' AND vip_until > 0 AND vip_until < ?",
+        "SELECT chat_id, keywords FROM users "
+        "WHERE role = 'vip' AND vip_until > 0 AND vip_until < ?",
         (now,),
     )
-    expired = [int(row[0]) for row in cur.fetchall()]
-    if not expired:
+    rows = cur.fetchall()
+    if not rows:
         return []
-    memory = _vip_expiry_memory_sql()
-    _execute(
-        "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
-        "memory_volumes = ? WHERE role = 'vip' AND vip_until > 0 AND vip_until < ?",
-        (memory, now),
-    )
+    expired: list[int] = []
+    for row in rows:
+        chat_id = int(row[0])
+        raw_kw = row[1] or ""
+        keywords = [k.strip() for k in raw_kw.split(",") if k.strip()]
+        kw_csv, memory = _regular_search_limits_sql(keywords)
+        _execute(
+            "UPDATE users SET role = 'regular', vip_until = 0, vip_feed_mode = 'normal', "
+            "keywords = ?, memory_volumes = ? WHERE chat_id = ?",
+            (kw_csv, memory, chat_id),
+        )
+        expired.append(chat_id)
     return expired
 
 

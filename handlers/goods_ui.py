@@ -2,6 +2,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot_ui import GOODS_CRUMB
+from config import REGULAR_MAX_KEYWORDS
 from goods_tree import (
     APPLE_LINES,
     GOODS_PER_PAGE,
@@ -44,7 +45,7 @@ __all__ = [
 
 
 def _max_keyword_slots(user: dict) -> int:
-    return 9999 if is_vip_user(user) else 5
+    return 9999 if is_vip_user(user) else REGULAR_MAX_KEYWORDS
 
 
 def _flatten_groups(groups: dict[str, tuple[str, ...]]) -> list[str]:
@@ -198,7 +199,7 @@ def _line_pick_text(line_slug: str, *, brand: str, user: dict | None = None) -> 
     ]
     if not is_vip_user(user):
         limit = _max_keyword_slots({"role": "regular"})
-        lines += ["", f"До {limit} моделей."]
+        lines += ["", "Обычный аккаунт: 1 модель." if limit == 1 else f"До {limit} моделей."]
     return "\n".join(lines)
 
 
@@ -433,7 +434,7 @@ def _category_line_pick_text(brand: str, line_slug: str, user: dict | None = Non
     ]
     if not is_vip_user(user):
         limit = _max_keyword_slots({"role": "regular"})
-        lines += ["", f"До {limit} моделей."]
+        lines += ["", "Обычный аккаунт: 1 модель." if limit == 1 else f"До {limit} моделей."]
     return "\n".join(lines)
 
 

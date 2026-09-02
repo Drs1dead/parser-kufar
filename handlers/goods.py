@@ -126,7 +126,7 @@ async def _toggle_catalog_keyword(
         if len(selected) >= max_kw:
             await safe_cb_answer(
                 cb,
-                "Лимит: 5 моделей для обычного пользователя.",
+                f"Лимит: {max_kw} модель для обычного аккаунта. VIP — без ограничений.",
                 show_alert=True,
             )
             return None

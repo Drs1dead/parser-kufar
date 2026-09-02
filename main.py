@@ -18,13 +18,17 @@ from config import (
     AVITO_SEARCH_URL,
     CHECK_INTERVAL,
     MARKET_DISCOUNT_THRESHOLD,
+    PUBLIC_BASE_URL,
     REGULAR_CHECK_INTERVAL,
+    ROLLYPAY_CALLBACK_URL,
+    ROLLYPAY_ENABLED,
     SQLITE_SYNCHRONOUS,
     TOKEN,
     VIP_CHECK_INTERVAL,
 )
 from db import SQLITE_PATH, close as db_close, init_db
 from logging_setup import configure_logging
+from payments.webhook_server import start_webhook_server, vip_payment_poll_loop
 from poller import poller
 
 log = logging.getLogger("kufar_bot")
@@ -98,6 +102,15 @@ async def main() -> None:
         )
 
     poll_task = asyncio.create_task(poller(bot))
+    webhook_runner = await start_webhook_server(bot)
+    vip_poll_task = asyncio.create_task(vip_payment_poll_loop(bot))
+
+    if ROLLYPAY_ENABLED:
+        log.info(
+            "rollypay enabled callback=%s public_base=%s",
+            ROLLYPAY_CALLBACK_URL or "(set PUBLIC_BASE_URL / DOMAIN)",
+            PUBLIC_BASE_URL or "(unset)",
+        )
 
     log.info(
         "ready @%s db=%s poll=%ss vip_poll=%ss regular_poll=%ss sqlite_sync=%s",
@@ -112,10 +125,17 @@ async def main() -> None:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         poll_task.cancel()
+        vip_poll_task.cancel()
         try:
             await poll_task
         except asyncio.CancelledError:
             pass
+        try:
+            await vip_poll_task
+        except asyncio.CancelledError:
+            pass
+        if webhook_runner is not None:
+            await webhook_runner.cleanup()
         await bot.session.close()
         db_close()
 

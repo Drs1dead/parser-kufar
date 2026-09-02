@@ -11,8 +11,10 @@ from avito_catalog import AVITO_QUICK_CITIES
 from config import (
     AVITO_ENABLED,
     DEFAULT_MEMORY_VOLUMES,
+    ROLLYPAY_ENABLED,
     format_price_for_country,
     format_price_for_user,
+    get_vip_plan,
     MAX_PRICE_PRESETS,
     MAX_PRICE_PRESETS_RUB,
     MEMORY_VOLUME_OPTIONS,
@@ -23,6 +25,7 @@ from avito_geo import place_to_option, search_places as avito_search_places
 from product_catalog import is_phones_category
 from db import (
     get_user,
+    get_vip_payment_by_order,
     redeem_promo_code,
     set_active,
     set_vip,
@@ -59,6 +62,8 @@ from bot_ui import (
     promo_back_keyboard,
     promo_prompt_text,
     vip_keyboard,
+    vip_pay_keyboard,
+    vip_pay_text,
     vip_text,
 )
 from handlers.goods_ui import (
@@ -79,9 +84,93 @@ from handlers.helpers import (
 )
 from handlers.states import CityInputState, CustomPriceState, PromoCodeState
 from logging_setup import log_exception
+from payments.fulfillment import check_and_fulfill_payment, start_vip_checkout
+from payments.rollypay import RollyPayError
 
 log = logging.getLogger(__name__)
 router = Router()
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("vip:buy:"))
+async def on_vip_buy(cb: CallbackQuery) -> None:
+    if cb.message is None:
+        await cb.answer()
+        return
+    user = await require_user_cb(cb)
+    if user is None:
+        return
+    if not ROLLYPAY_ENABLED:
+        await cb.answer("Оплата временно недоступна", show_alert=True)
+        return
+    plan_id = (cb.data or "").split(":")[-1]
+    if get_vip_plan(plan_id) is None:
+        await cb.answer("Неизвестный тариф", show_alert=True)
+        return
+    chat_id = cb.message.chat.id
+    try:
+        row = await start_vip_checkout(chat_id, plan_id)
+    except RollyPayError as exc:
+        log.warning("vip checkout failed chat_id=%s: %s", chat_id, exc)
+        await cb.answer("Не удалось создать оплату. Попробуйте позже.", show_alert=True)
+        return
+    except Exception:
+        log_exception(log, "vip checkout error chat_id=%s", chat_id)
+        await cb.answer("Ошибка оплаты. Попробуйте позже.", show_alert=True)
+        return
+    await flush_screen(
+        cb,
+        vip_pay_text(row),
+        reply_markup=vip_pay_keyboard(row),
+        notice="💳 Счёт создан",
+    )
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("vip:check:"))
+async def on_vip_check(cb: CallbackQuery) -> None:
+    if cb.message is None:
+        await cb.answer()
+        return
+    user = await require_user_cb(cb)
+    if user is None:
+        return
+    if not ROLLYPAY_ENABLED:
+        await cb.answer("Оплата временно недоступна", show_alert=True)
+        return
+    order_id = (cb.data or "")[len("vip:check:") :]
+    row = get_vip_payment_by_order(order_id)
+    if row is None or int(row.get("chat_id") or 0) != cb.message.chat.id:
+        await cb.answer("Счёт не найден", show_alert=True)
+        return
+    if row.get("status") == "paid":
+        user = get_user(cb.message.chat.id) or user
+        await flush_screen(
+            cb,
+            vip_text(user),
+            reply_markup=vip_keyboard(user),
+            notice="✅ VIP уже активен",
+        )
+        return
+    try:
+        granted = await check_and_fulfill_payment(
+            order_id, bot=cb.bot
+        )
+    except RollyPayError:
+        await cb.answer("Не удалось проверить оплату", show_alert=True)
+        return
+    except Exception:
+        log_exception(log, "vip check error order=%s", order_id)
+        await cb.answer("Ошибка проверки", show_alert=True)
+        return
+    if granted:
+        user = get_user(cb.message.chat.id) or user
+        await flush_screen(
+            cb,
+            vip_text(user),
+            reply_markup=vip_keyboard(user),
+            notice="✅ VIP активирован",
+        )
+        return
+    await cb.answer("Оплата ещё не поступила", show_alert=True)
 
 def _price_presets_for_user(user: dict | None) -> tuple[int, ...]:
     if normalize_country((user or {}).get("country")) == COUNTRY_RU:

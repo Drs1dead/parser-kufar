@@ -3,7 +3,7 @@
 ## Структура проекта
 
 ```
-main.py              # Запуск: Telegram polling + фоновый poller
+main.py              # Запуск: Telegram polling + фоновый poller + RollyPay HTTP
 poller.py            # Цикл: Kufar → фильтры → отправка
 user_matching.py     # Какие объявления подходят пользователю
 kufar_fetch.py       # Запросы к API Kufar
@@ -19,6 +19,7 @@ config.py            # Настройки из .env
 bot_ui.py            # Тексты и клавиатуры меню
 formatter.py         # Формат карточки объявления
 goods_tree.py        # Линейки внутри категории
+payments/            # RollyPay: клиент, fulfillment VIP, webhook HTTP
 
 marketplace/
   types.py           # NormalizedAd, SOURCE_*, COUNTRY_*
@@ -95,6 +96,19 @@ flowchart LR
 | `ideal` | pre: `ideal_passes(stage=pre)` в `user_matching`; strict: enrich описаний → `ideal_passes(stage=strict)` в `poller`; отклонённые strict помечаются `seen` |
 
 Правила «Идеальные» — `filters.py` (`IDEAL_*`, `parse_battery_percents`); состояние из `condition_label` в `kufar_fetch.normalize_listing`.
+
+### VIP оплата (RollyPay)
+
+При `ROLLYPAY_ENABLED=true` бот поднимает aiohttp на `0.0.0.0:$PORT` (Telegram остаётся на polling):
+
+| Endpoint | Назначение |
+|----------|------------|
+| `GET /health` | Проверка домена BotHost |
+| `POST /webhooks/rollypay` | Callback RollyPay (HMAC `X-Timestamp` + `.` + raw body) |
+
+Тарифы: 7д/$1, 30д/$3, 90д/$7 → сумма в RUB по курсу кассы. Заказы в `vip_payments`; после `paid` — `set_vip`. Резерв: опрос pending каждые `VIP_PAYMENT_POLL_SECONDS`.
+
+Callback URL в панели RollyPay: `{PUBLIC_BASE_URL}/webhooks/rollypay` (или `https://{DOMAIN}/webhooks/rollypay`).
 
 ## Поток кнопок
 

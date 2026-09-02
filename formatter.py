@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 
 from config import (
     AD_DESCRIPTION_MAX_CHARS,
-    AD_DESCRIPTION_MAX_CHARS_REGULAR,
     DISPLAY_TZ,
     format_local_datetime,
     format_memory_volume,
@@ -91,13 +90,12 @@ def format_ad(
 
     location = _esc(ad.get("location") or "")
     summary = _esc((ad.get("summary") or "").strip())
-    desc_raw = (ad.get("description") or "").strip()
-    desc_limit = (
-        AD_DESCRIPTION_MAX_CHARS_REGULAR if compact else AD_DESCRIPTION_MAX_CHARS
-    )
-    if len(desc_raw) > desc_limit:
-        desc_raw = desc_raw[: desc_limit - 1].rstrip() + "…"
-    description = _esc(desc_raw)
+    description = ""
+    if not compact:
+        desc_raw = (ad.get("description") or "").strip()
+        if len(desc_raw) > AD_DESCRIPTION_MAX_CHARS:
+            desc_raw = desc_raw[: AD_DESCRIPTION_MAX_CHARS - 1].rstrip() + "…"
+        description = _esc(desc_raw)
     link = ad.get("link") or ""
     listed = _format_list_time(ad.get("list_time"))
 

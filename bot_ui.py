@@ -9,6 +9,8 @@ from config import (
     DEFAULT_MEMORY_VOLUMES,
     MEMORY_VOLUME_OPTIONS,
     REFERRAL_VIP_DAYS_PER_FRIEND,
+    ROLLYPAY_ENABLED,
+    VIP_PLANS,
     VIP_PRICE_USD,
     format_local_datetime,
     format_memory_volume,
@@ -262,17 +264,35 @@ def vip_text(user: dict | None) -> str:
             lines += ["", "Поток: <b>идеальные</b>"]
         else:
             lines += ["", "Поток: <b>обычная рассылка</b>"]
+        if ROLLYPAY_ENABLED:
+            lines += ["", "Продлить VIP — тарифы ниже."]
     else:
         lines += [
             "",
             "Что даёт VIP:",
-            "• без лимита моделей",
+            "• без лимита моделей (обычный — 1 модель и 1 память)",
+            "• фото и описание объявления",
             "• сразу, без мусора",
             "• ниже рынка, обмен, идеальные",
-            "",
-            f"Цена: <b>{VIP_PRICE_USD}$</b> / 30 дней · @manohio",
-            "Промокод — кнопка ниже.",
         ]
+        if ROLLYPAY_ENABLED:
+            week = VIP_PLANS["week"]
+            month = VIP_PLANS["month"]
+            quarter = VIP_PLANS["quarter"]
+            lines += [
+                "",
+                "Тарифы (оплата онлайн):",
+                f"• {int(week['days'])} дн. — <b>${int(week['usd'])}</b>",
+                f"• {int(month['days'])} дн. — <b>${int(month['usd'])}</b>",
+                f"• {int(quarter['days'])} дн. — <b>${int(quarter['usd'])}</b>",
+                "После оплаты VIP включается автоматически.",
+            ]
+        else:
+            lines += [
+                "",
+                f"Цена: <b>{VIP_PRICE_USD}$</b> / 30 дней · @manohio",
+            ]
+        lines.append("Промокод — кнопка ниже.")
 
     if user and user.get("chat_id") is not None:
         cid = int(user["chat_id"])
@@ -302,8 +322,66 @@ def vip_keyboard(user: dict | None) -> InlineKeyboardMarkup:
         rows.append(
             [InlineKeyboardButton(text=idl, callback_data="nav:vipf:ideal")]
         )
+    if ROLLYPAY_ENABLED:
+        week = VIP_PLANS["week"]
+        month = VIP_PLANS["month"]
+        quarter = VIP_PLANS["quarter"]
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{int(week['days'])}д · ${int(week['usd'])}",
+                    callback_data="vip:buy:week",
+                ),
+                InlineKeyboardButton(
+                    text=f"{int(month['days'])}д · ${int(month['usd'])}",
+                    callback_data="vip:buy:month",
+                ),
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{int(quarter['days'])}д · ${int(quarter['usd'])}",
+                    callback_data="vip:buy:quarter",
+                )
+            ]
+        )
     rows.append([InlineKeyboardButton(text="🎟 Промокод", callback_data="nav:promo")])
     rows.append(back_row())
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def vip_pay_text(row: dict) -> str:
+    days = int(row.get("days") or 0)
+    rub = str(row.get("amount_rub") or "")
+    usd = row.get("amount_usd")
+    return (
+        "💳 <b>Оплата VIP</b>\n\n"
+        f"Срок: <b>{days}</b> дн.\n"
+        f"Сумма: <b>{rub} ₽</b>"
+        + (f" (~${usd:g})" if usd is not None else "")
+        + "\n\n"
+        "Откройте ссылку и оплатите. После 100% оплаты VIP включится сам.\n"
+        "Если не пришло — нажмите «Проверить оплату»."
+    )
+
+
+def vip_pay_keyboard(row: dict) -> InlineKeyboardMarkup:
+    order_id = str(row.get("order_id") or "")
+    pay_url = str(row.get("pay_url") or "")
+    rows: list[list[InlineKeyboardButton]] = []
+    if pay_url:
+        rows.append([InlineKeyboardButton(text="🔗 Оплатить", url=pay_url)])
+    if order_id:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔄 Проверить оплату",
+                    callback_data=f"vip:check:{order_id}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:vip")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -313,7 +391,7 @@ def memory_screen_text(user: dict | None) -> str:
     limit = (
         "VIP: можно несколько объёмов."
         if user and user.get("role") == "vip"
-        else "Обычный аккаунт: один объём."
+        else "Обычный аккаунт: один объём памяти."
     )
     return (
         "<b>Память</b>\n"

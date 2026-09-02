@@ -46,8 +46,59 @@ CHECK_INTERVAL = max(1, min(_raw_check, VIP_CHECK_INTERVAL))
 
 FIRST_RUN_LIMIT = int(os.getenv("FIRST_RUN_LIMIT", "3"))
 VIP_SUBSCRIPTION_DAYS = int(os.getenv("VIP_SUBSCRIPTION_DAYS", "30"))
-VIP_PRICE_USD = int(os.getenv("VIP_PRICE_USD", "2"))
+VIP_PRICE_USD = int(os.getenv("VIP_PRICE_USD", "3"))
 REFERRAL_VIP_DAYS_PER_FRIEND = max(1, int(os.getenv("REFERRAL_VIP_DAYS_PER_FRIEND", "1")))
+REGULAR_MAX_KEYWORDS = max(1, int(os.getenv("REGULAR_MAX_KEYWORDS", "1")))
+
+# RollyPay VIP checkout
+_rolly_enabled = os.getenv("ROLLYPAY_ENABLED", "false").strip().lower()
+ROLLYPAY_ENABLED = _rolly_enabled in ("1", "true", "yes", "on")
+ROLLYPAY_API_KEY = os.getenv("ROLLYPAY_API_KEY", "").strip()
+ROLLYPAY_SIGNING_SECRET = os.getenv("ROLLYPAY_SIGNING_SECRET", "").strip()
+ROLLYPAY_TERMINAL_ID = os.getenv(
+    "ROLLYPAY_TERMINAL_ID", "dd737481-bbfd-46a9-992c-feb99069bb23"
+).strip()
+ROLLYPAY_API_URL = (
+    os.getenv("ROLLYPAY_API_URL", "https://api.rollypay.io").strip().rstrip("/")
+    or "https://api.rollypay.io"
+)
+ROLLYPAY_CALLBACK_PATH = "/webhooks/rollypay"
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "0.0.0.0").strip() or "0.0.0.0"
+WEBHOOK_PORT = max(1, int(os.getenv("PORT", os.getenv("WEBHOOK_PORT", "8080"))))
+_public_base = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+if not _public_base:
+    _domain = os.getenv("DOMAIN", "").strip().rstrip("/")
+    if _domain:
+        if _domain.startswith("http://") or _domain.startswith("https://"):
+            _public_base = _domain
+        else:
+            _public_base = f"https://{_domain}"
+PUBLIC_BASE_URL = _public_base
+ROLLYPAY_CALLBACK_URL = (
+    f"{PUBLIC_BASE_URL}{ROLLYPAY_CALLBACK_PATH}" if PUBLIC_BASE_URL else ""
+)
+VIP_PAYMENT_POLL_SECONDS = max(15, int(os.getenv("VIP_PAYMENT_POLL_SECONDS", "45")))
+
+# plan_id -> (days, usd). Optional RUB overrides: VIP_PRICE_RUB_7 / _30 / _90
+VIP_PLANS: dict[str, dict[str, int | float]] = {
+    "week": {"days": 7, "usd": 1},
+    "month": {"days": 30, "usd": 3},
+    "quarter": {"days": 90, "usd": 7},
+}
+_rub_override_env = {
+    "week": "VIP_PRICE_RUB_7",
+    "month": "VIP_PRICE_RUB_30",
+    "quarter": "VIP_PRICE_RUB_90",
+}
+VIP_PLAN_RUB_OVERRIDE: dict[str, str | None] = {}
+for _plan_id, _env_name in _rub_override_env.items():
+    _raw = os.getenv(_env_name, "").strip()
+    VIP_PLAN_RUB_OVERRIDE[_plan_id] = _raw if _raw else None
+
+
+def get_vip_plan(plan_id: str) -> dict[str, int | float] | None:
+    plan = VIP_PLANS.get(str(plan_id or "").strip().lower())
+    return dict(plan) if plan else None
 
 # Объёмы памяти для фильтра (строки в БД: "64", "128", …, "512+")
 MEMORY_VOLUME_OPTIONS: tuple[str, ...] = ("64", "128", "256", "512", "512+")

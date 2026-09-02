@@ -17,19 +17,18 @@ class FormatAdTests(unittest.TestCase):
             "list_time": "2024-08-24T10:49:00Z",
         }
 
-    def test_compact_limits_description_and_hides_date(self) -> None:
+    def test_compact_hides_description_and_date(self) -> None:
         ad = self._sample_ad()
         text = format_ad(ad, compact=True, country="by")
         self.assertNotIn("Опубликовано", text)
         self.assertIn("iPhone 15", text)
-        # 150 chars max + ellipsis in description block
-        desc_part = text.split("Открыть на Kufar")[0]
-        self.assertLessEqual(len(desc_part), 400)
+        self.assertNotIn("x" * 20, text)
 
-    def test_vip_shows_date_and_longer_description(self) -> None:
+    def test_vip_shows_date_and_description(self) -> None:
         ad = self._sample_ad()
         text = format_ad(ad, compact=False, country="by")
         self.assertIn("Опубликовано", text)
+        self.assertIn("xxx", text)
 
     def test_triple_price_in_card(self) -> None:
         ad = self._sample_ad()

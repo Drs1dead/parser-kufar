@@ -74,6 +74,7 @@ class Sprint2Tests(unittest.TestCase):
 
     def test_update_product_category_resets_keywords(self) -> None:
         db.add_user(8, username="u")
+        db.set_vip(8, days=7)
         db.update_keywords(8, ["iphone 15", "iphone 16"])
         user = db.get_user(8)
         assert user is not None
