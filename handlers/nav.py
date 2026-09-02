@@ -64,6 +64,8 @@ from bot_ui import (
     vip_keyboard,
     vip_pay_keyboard,
     vip_pay_text,
+    vip_plans_keyboard,
+    vip_plans_text,
     vip_text,
 )
 from handlers.goods_ui import (
@@ -121,7 +123,7 @@ async def on_vip_buy(cb: CallbackQuery) -> None:
         cb,
         vip_pay_text(row),
         reply_markup=vip_pay_keyboard(row),
-        notice="💳 Счёт создан",
+        notice="Счёт создан",
     )
 
 
@@ -147,7 +149,7 @@ async def on_vip_check(cb: CallbackQuery) -> None:
             cb,
             vip_text(user),
             reply_markup=vip_keyboard(user),
-            notice="✅ VIP уже активен",
+            notice="VIP уже активен",
         )
         return
     try:
@@ -167,7 +169,7 @@ async def on_vip_check(cb: CallbackQuery) -> None:
             cb,
             vip_text(user),
             reply_markup=vip_keyboard(user),
-            notice="✅ VIP активирован",
+            notice="VIP активирован",
         )
         return
     await cb.answer("Оплата ещё не поступила", show_alert=True)
@@ -195,7 +197,7 @@ def price_presets_keyboard(user: dict | None) -> InlineKeyboardMarkup:
     if row:
         rows.append(row)
     if is_vip_user(user):
-        rows.append([InlineKeyboardButton(text="🎯 Своя цена (VIP)", callback_data="nav:price:custom")])
+        rows.append([InlineKeyboardButton(text="Своя цена", callback_data="nav:price:custom")])
     rows.append(back_row())
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -673,6 +675,17 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
                 cb,
                 vip_text(user),
                 reply_markup=vip_keyboard(user),
+            )
+            return
+
+        if data == "nav:vip:plans":
+            if not ROLLYPAY_ENABLED:
+                await cb.answer("Оплата временно недоступна", show_alert=True)
+                return
+            await flush_screen(
+                cb,
+                vip_plans_text(user),
+                reply_markup=vip_plans_keyboard(),
             )
             return
 

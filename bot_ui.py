@@ -44,18 +44,20 @@ HELP_TEXT_BY = (
     "<b>Помощь</b>\n\n"
     "Kufi ищет технику на <b>Kufar.by</b> и присылает совпадения. "
     "Цены — в <b>Br</b>.\n\n"
-    "Настройте <b>Товары</b>, лимит и город, затем включите уведомления.\n\n"
+    "1. <b>Товары</b> — модель\n"
+    "2. <b>Цена</b> и <b>Город</b>\n"
+    "3. <b>Включить</b> уведомления на главной\n\n"
     "Новости и документы — кнопки ниже."
 )
 
 HELP_TEXT_RU = (
     "<b>Помощь</b>\n\n"
-    "Kufi ищет технику на <b>Avito</b> (Россия) и присылает совпадения в Telegram. "
+    "Kufi ищет технику на <b>Avito</b> и присылает совпадения. "
     "Цены — в <b>₽</b>.\n\n"
-    "1. <b>Город</b> — Москва, Смоленск или ввод названия\n"
-    "2. <b>Товары</b> — модели iPhone / Samsung\n"
-    "3. <b>Цена</b> — лимит, например 15 000–30 000 ₽\n"
-    "4. <b>Включить</b> — уведомления на главной\n\n"
+    "1. <b>Город</b>\n"
+    "2. <b>Товары</b> — модель\n"
+    "3. <b>Цена</b>\n"
+    "4. <b>Включить</b> уведомления\n\n"
     "Новости и документы — кнопки ниже."
 )
 
@@ -81,19 +83,13 @@ def _memory_display(volumes: list[str] | None) -> str:
 
 def _vip_status_lines(user: dict | None) -> list[str]:
     if not user:
-        return ["Аккаунт: —"]
+        return ["Сейчас: —"]
     now = int(time.time())
     vip_until = int(user.get("vip_until") or 0)
     if user.get("role") == "vip" and vip_until > now:
         until = format_local_datetime(vip_until, fmt="%d.%m.%Y в %H:%M")
-        return [
-            "Аккаунт: <b>VIP</b>",
-            f"До: <b>{until}</b>",
-        ]
-    return [
-        "Аккаунт: обычный",
-        "VIP не подключён",
-    ]
+        return [f"Сейчас: <b>VIP</b> до {until}"]
+    return ["Сейчас: обычный аккаунт"]
 
 
 def referral_link_for_user(user: dict | None) -> str:
@@ -119,10 +115,10 @@ def back_keyboard() -> InlineKeyboardMarkup:
 def help_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📰 Новости", url=SUPPORT_URL)],
+            [InlineKeyboardButton(text="Новости", url=SUPPORT_URL)],
             [
-                InlineKeyboardButton(text="🔒 Политика", url=PRIVACY_POLICY_URL),
-                InlineKeyboardButton(text="📄 Оферта", url=TERMS_OF_SERVICE_URL),
+                InlineKeyboardButton(text="Политика", url=PRIVACY_POLICY_URL),
+                InlineKeyboardButton(text="Оферта", url=TERMS_OF_SERVICE_URL),
             ],
             back_row(),
         ]
@@ -143,38 +139,31 @@ def user_avito_city_label(user: dict | None) -> str:
 
 def home_text(user: dict | None, *, is_new: bool) -> str:
     if user is None:
-        return (
-            "<b>Kufi</b>\n"
-            "Kufar · нажмите <code>/start</code>"
-        )
+        return "<b>Kufi</b>\nНажмите <code>/start</code>"
 
     active = user.get("active")
     models_n = _kw_count(user)
     max_p = user.get("max_price") or 0
-    status = "уведомления включены" if active else "на паузе"
+    status = "уведомления вкл." if active else "на паузе"
     source_line = user_source_label(user)
     cat = category_label(user.get("product_category"))
-    lines = [
-        "<b>Kufi</b>",
-        f"{source_line} · {status}",
-        "",
-        f"{cat} · {models_n} {_plural_models(models_n)}",
-    ]
     country = normalize_country(user.get("country"))
     if country == COUNTRY_RU:
         geo = user_avito_city_label(user)
     else:
         geo = user_city_label(user)
-    detail = f"до {format_price_for_user(max_p, user)} · {geo}"
-    if is_phones_category(user.get("product_category")):
-        mem = (user.get("memory_volumes") or list(DEFAULT_MEMORY_VOLUMES))
-        mem_txt = ", ".join(format_memory_volume(v, short=True) for v in mem)
-        detail += f" · {mem_txt}"
-    lines.append(detail)
 
-    if is_new:
-        hint = "Товары и фильтры — кнопки ниже, затем включите уведомления."
-        lines += ["", hint]
+    lines = [
+        "<b>Kufi</b>",
+        f"{source_line} · {status}",
+        "",
+        f"<b>{cat}</b> · {models_n} {_plural_models(models_n)}",
+        f"до {format_price_for_user(max_p, user)} · {geo}",
+    ]
+    if is_phones_category(user.get("product_category")):
+        mem = user.get("memory_volumes") or list(DEFAULT_MEMORY_VOLUMES)
+        mem_txt = ", ".join(format_memory_volume(v, short=True) for v in mem)
+        lines[-1] += f" · {mem_txt}"
 
     mode = user.get("vip_feed_mode") or "normal"
     if user.get("role") == "vip":
@@ -185,20 +174,25 @@ def home_text(user: dict | None, *, is_new: bool) -> str:
         elif mode == "ideal":
             lines.append("Поток: идеальные")
 
+    hint = ""
     if country == COUNTRY_RU:
         if not AVITO_ENABLED:
-            lines.append("Рассылка Avito — скоро.")
+            hint = "Рассылка Avito — скоро."
         elif not user.get("avito_city_id"):
-            lines.append("Шаг 1: выберите город (кнопка «Город»).")
+            hint = "Выберите город."
         elif models_n == 0:
-            lines.append("Шаг 2: выберите модели в «Товары».")
+            hint = "Выберите модель в «Товары»."
         elif not active:
-            lines.append("Шаг 3: включите уведомления.")
+            hint = "Включите уведомления."
     else:
         if models_n == 0:
-            lines.append("Выберите модели в «Товары».")
+            hint = "Выберите модель в «Товары»."
         elif not active:
-            lines.append("Уведомления выключены.")
+            hint = "Включите уведомления."
+    if is_new and not hint:
+        hint = "Настройте фильтры и включите уведомления."
+    if hint:
+        lines += ["", hint]
 
     return "\n".join(lines)
 
@@ -218,88 +212,71 @@ def _plural_models(n: int) -> str:
 def home_keyboard(*, is_admin: bool, user: dict | None = None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if user and user.get("active"):
-        rows.append([InlineKeyboardButton(text="🔕 Пауза", callback_data="nav:stop")])
+        rows.append([InlineKeyboardButton(text="Пауза", callback_data="nav:stop")])
     elif user:
         rows.append(
-            [InlineKeyboardButton(text="🔔 Включить", callback_data="nav:resume")]
+            [InlineKeyboardButton(text="Включить уведомления", callback_data="nav:resume")]
         )
     rows.append(
         [
-            InlineKeyboardButton(text="⭐ VIP", callback_data="nav:vip"),
-            InlineKeyboardButton(text="💡 Помощь", callback_data="nav:help"),
+            InlineKeyboardButton(text="VIP", callback_data="nav:vip"),
+            InlineKeyboardButton(text="Помощь", callback_data="nav:help"),
         ]
     )
     goods_row = [
-        InlineKeyboardButton(text="📱 Товары", callback_data="nav:goods"),
-        InlineKeyboardButton(text="💰 Цена", callback_data="nav:price"),
+        InlineKeyboardButton(text="Товары", callback_data="nav:goods"),
+        InlineKeyboardButton(text="Цена", callback_data="nav:price"),
     ]
     if is_phones_category((user or {}).get("product_category")):
         goods_row.append(
-            InlineKeyboardButton(text="💾 Память", callback_data="nav:memory")
+            InlineKeyboardButton(text="Память", callback_data="nav:memory")
         )
     rows.append(goods_row)
     rows.append(
         [
-            InlineKeyboardButton(text="🌍 Страна", callback_data="nav:country"),
-            InlineKeyboardButton(text="📍 Город", callback_data="nav:city"),
+            InlineKeyboardButton(text="Страна", callback_data="nav:country"),
+            InlineKeyboardButton(text="Город", callback_data="nav:city"),
         ]
     )
     if is_admin:
         rows.append(
-            [InlineKeyboardButton(text="🔐 Админ-панель", callback_data="nav:admin")]
+            [InlineKeyboardButton(text="Админ", callback_data="nav:admin")]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def vip_text(user: dict | None) -> str:
-    lines = ["⭐ <b>VIP</b>", "", *_vip_status_lines(user)]
+    lines = ["<b>VIP</b>", *_vip_status_lines(user)]
 
     if user and user.get("role") == "vip":
         mode = user.get("vip_feed_mode") or "normal"
         if mode == "below_market":
-            lines += ["", "Поток: <b>ниже рынка</b>"]
+            flow = "ниже рынка"
         elif mode == "exchange":
-            lines += ["", "Поток: <b>только обмен</b>"]
+            flow = "только обмен"
         elif mode == "ideal":
-            lines += ["", "Поток: <b>идеальные</b>"]
+            flow = "идеальные"
         else:
-            lines += ["", "Поток: <b>обычная рассылка</b>"]
+            flow = "обычная рассылка"
+        lines += ["", f"Поток: <b>{flow}</b>"]
         if ROLLYPAY_ENABLED:
-            lines += ["", "Продлить VIP — тарифы ниже."]
+            lines.append("Продление — кнопка ниже.")
     else:
         lines += [
             "",
-            "Что даёт VIP:",
-            "• без лимита моделей (обычный — 1 модель и 1 память)",
-            "• фото и описание объявления",
-            "• сразу, без мусора",
-            "• ниже рынка, обмен, идеальные",
+            "• без лимита моделей",
+            "• фото и описание в рассылке",
+            "• потоки: ниже рынка, обмен, идеальные",
         ]
-        if ROLLYPAY_ENABLED:
-            week = VIP_PLANS["week"]
-            month = VIP_PLANS["month"]
-            quarter = VIP_PLANS["quarter"]
-            lines += [
-                "",
-                "Тарифы (оплата онлайн):",
-                f"• {int(week['days'])} дн. — <b>${int(week['usd'])}</b>",
-                f"• {int(month['days'])} дн. — <b>${int(month['usd'])}</b>",
-                f"• {int(quarter['days'])} дн. — <b>${int(quarter['usd'])}</b>",
-                "После оплаты VIP включается автоматически.",
-            ]
-        else:
-            lines += [
-                "",
-                f"Цена: <b>{VIP_PRICE_USD}$</b> / 30 дней · @manohio",
-            ]
-        lines.append("Промокод — кнопка ниже.")
+        if not ROLLYPAY_ENABLED:
+            lines += ["", f"Цена: <b>{VIP_PRICE_USD}$</b> / 30 дн. · @manohio"]
 
     if user and user.get("chat_id") is not None:
         cid = int(user["chat_id"])
         ref_n = count_referrals(cid)
         link = referral_link_for_user(user)
         days = REFERRAL_VIP_DAYS_PER_FRIEND
-        lines += ["", f"За друга: +{days} дн. VIP · приглашено: <b>{ref_n}</b>"]
+        lines += ["", f"За друга: +{days} дн. · приглашено: <b>{ref_n}</b>"]
         if link:
             lines.append(f"<code>{link}</code>")
 
@@ -308,11 +285,12 @@ def vip_text(user: dict | None) -> str:
 
 def vip_keyboard(user: dict | None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    if user and user.get("role") == "vip":
+    is_vip = bool(user and user.get("role") == "vip")
+    if is_vip:
         mode = user.get("vip_feed_mode") or "normal"
-        bm = "🔥 Ниже рынка ✅" if mode == "below_market" else "🔥 Ниже рынка"
-        ex = "🔄 Обмен ✅" if mode == "exchange" else "🔄 Обмен"
-        idl = "✨ Идеальные ✅" if mode == "ideal" else "✨ Идеальные"
+        bm = "Ниже рынка ✓" if mode == "below_market" else "Ниже рынка"
+        ex = "Обмен ✓" if mode == "exchange" else "Обмен"
+        idl = "Идеальные ✓" if mode == "ideal" else "Идеальные"
         rows.append(
             [
                 InlineKeyboardButton(text=bm, callback_data="nav:vipf:bm"),
@@ -323,46 +301,70 @@ def vip_keyboard(user: dict | None) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=idl, callback_data="nav:vipf:ideal")]
         )
     if ROLLYPAY_ENABLED:
-        week = VIP_PLANS["week"]
-        month = VIP_PLANS["month"]
-        quarter = VIP_PLANS["quarter"]
+        buy_label = "Продлить VIP" if is_vip else "Купить VIP"
         rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"{int(week['days'])}д · ${int(week['usd'])}",
-                    callback_data="vip:buy:week",
-                ),
-                InlineKeyboardButton(
-                    text=f"{int(month['days'])}д · ${int(month['usd'])}",
-                    callback_data="vip:buy:month",
-                ),
-            ]
+            [InlineKeyboardButton(text=buy_label, callback_data="nav:vip:plans")]
         )
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"{int(quarter['days'])}д · ${int(quarter['usd'])}",
-                    callback_data="vip:buy:quarter",
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton(text="🎟 Промокод", callback_data="nav:promo")])
+    rows.append([InlineKeyboardButton(text="Промокод", callback_data="nav:promo")])
     rows.append(back_row())
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def vip_plans_text(user: dict | None = None) -> str:
+    week = VIP_PLANS["week"]
+    month = VIP_PLANS["month"]
+    quarter = VIP_PLANS["quarter"]
+    is_vip = bool(user and user.get("role") == "vip")
+    action = "Продление" if is_vip else "Покупка"
+    return (
+        f"<b>Тариф VIP</b>\n"
+        f"{action} — выберите срок. Оплата онлайн, VIP включится сам.\n\n"
+        f"• {int(week['days'])} дней — <b>${int(week['usd'])}</b>\n"
+        f"• {int(month['days'])} дней — <b>${int(month['usd'])}</b>\n"
+        f"• {int(quarter['days'])} дней — <b>${int(quarter['usd'])}</b>"
+    )
+
+
+def vip_plans_keyboard() -> InlineKeyboardMarkup:
+    week = VIP_PLANS["week"]
+    month = VIP_PLANS["month"]
+    quarter = VIP_PLANS["quarter"]
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"{int(week['days'])} дней — ${int(week['usd'])}",
+                    callback_data="vip:buy:week",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"{int(month['days'])} дней — ${int(month['usd'])}",
+                    callback_data="vip:buy:month",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"{int(quarter['days'])} дней — ${int(quarter['usd'])}",
+                    callback_data="vip:buy:quarter",
+                )
+            ],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:vip")],
+        ]
+    )
 
 
 def vip_pay_text(row: dict) -> str:
     days = int(row.get("days") or 0)
     rub = str(row.get("amount_rub") or "")
     usd = row.get("amount_usd")
+    usd_part = f" (~${usd:g})" if usd is not None else ""
     return (
-        "💳 <b>Оплата VIP</b>\n\n"
+        "<b>Оплата VIP</b>\n"
         f"Срок: <b>{days}</b> дн.\n"
-        f"Сумма: <b>{rub} ₽</b>"
-        + (f" (~${usd:g})" if usd is not None else "")
-        + "\n\n"
-        "Откройте ссылку и оплатите. После 100% оплаты VIP включится сам.\n"
-        "Если не пришло — нажмите «Проверить оплату»."
+        f"Сумма: <b>{rub} ₽</b>{usd_part}\n\n"
+        "Нажмите «Оплатить», завершите платёж.\n"
+        "После 100% оплаты VIP включится автоматически."
     )
 
 
@@ -371,16 +373,19 @@ def vip_pay_keyboard(row: dict) -> InlineKeyboardMarkup:
     pay_url = str(row.get("pay_url") or "")
     rows: list[list[InlineKeyboardButton]] = []
     if pay_url:
-        rows.append([InlineKeyboardButton(text="🔗 Оплатить", url=pay_url)])
+        rows.append([InlineKeyboardButton(text="Оплатить", url=pay_url)])
     if order_id:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🔄 Проверить оплату",
+                    text="Проверить оплату",
                     callback_data=f"vip:check:{order_id}",
                 )
             ]
         )
+    rows.append(
+        [InlineKeyboardButton(text="К тарифам", callback_data="nav:vip:plans")]
+    )
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:vip")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -388,15 +393,15 @@ def vip_pay_keyboard(row: dict) -> InlineKeyboardMarkup:
 def memory_screen_text(user: dict | None) -> str:
     vols = (user or {}).get("memory_volumes") or list(DEFAULT_MEMORY_VOLUMES)
     selected = _memory_display(vols)
-    limit = (
-        "VIP: можно несколько объёмов."
+    hint = (
+        "Можно выбрать несколько объёмов."
         if user and user.get("role") == "vip"
-        else "Обычный аккаунт: один объём памяти."
+        else "Один объём памяти."
     )
     return (
         "<b>Память</b>\n"
         f"Сейчас: <b>{selected}</b>\n"
-        f"{limit}"
+        f"{hint}"
     )
 
 
@@ -426,16 +431,12 @@ def country_screen_text(user: dict | None) -> str:
     country = normalize_country((user or {}).get("country"))
     flag = FLAG_RU if country == COUNTRY_RU else FLAG_BY
     current = COUNTRY_LABELS.get(country, country)
-    if AVITO_ENABLED:
-        ru_line = f"{FLAG_RU} Россия — Avito, уведомления работают"
-    else:
-        ru_line = f"{FLAG_RU} Россия — скоро (Avito)"
+    ru_note = "Avito" if AVITO_ENABLED else "скоро"
     return (
         "<b>Страна</b>\n"
-        f"Сейчас: {flag} <b>{current}</b>\n\n"
-        f"{FLAG_BY} Беларусь — Kufar.by\n"
-        f"{ru_line}\n"
-        "При смене страны лимит цены подстроится к пресетам валюты."
+        f"Сейчас: {flag} <b>{current}</b>\n"
+        f"{FLAG_BY} Беларусь — Kufar · {FLAG_RU} Россия — {ru_note}\n"
+        "Лимит цены подстроится под валюту."
     )
 
 
@@ -465,23 +466,22 @@ def country_keyboard(user: dict | None) -> InlineKeyboardMarkup:
 
 def avito_city_screen_text(user: dict | None) -> str:
     current = user_avito_city_label(user)
-    if AVITO_ENABLED:
-        hint = "\n\nПосле города — «Товары», «Цена» и «Включить» на главной."
-    else:
-        hint = "\n\nРассылка Avito ещё не запущена — город можно выбрать заранее."
+    hint = (
+        "Дальше — товары, цена и уведомления."
+        if AVITO_ENABLED
+        else "Рассылка Avito скоро; город можно выбрать заранее."
+    )
     return (
-        "<b>Город (Avito)</b>\n"
+        "<b>Город</b>\n"
         f"Сейчас: <b>{current}</b>\n"
-        "Кнопки ниже или ввод названия — Москва, Смоленск и др."
         f"{hint}"
     )
 
 
 def avito_city_typed_prompt_text() -> str:
     return (
-        "<b>Город (Avito)</b>\n"
-        "Введите название города, например "
-        "<code>Москва</code> или <code>Смоленск</code>."
+        "<b>Город</b>\n"
+        "Введите название, например <code>Москва</code>."
     )
 
 
@@ -521,7 +521,7 @@ def avito_city_keyboard(user: dict | None) -> InlineKeyboardMarkup:
     rows.append(
         [
             InlineKeyboardButton(
-                text="⌨️ Ввести город",
+                text="Ввести город",
                 callback_data="avito:city:typed",
             )
         ]
@@ -533,18 +533,16 @@ def avito_city_keyboard(user: dict | None) -> InlineKeyboardMarkup:
 def city_screen_text(user: dict | None) -> str:
     current = user_city_label(user)
     return (
-        "<b>Город (Kufar)</b>\n"
+        "<b>Город</b>\n"
         f"Сейчас: <b>{current}</b>\n"
-        "Кнопки ниже или ввод названия — Брест, Гродно и др.\n\n"
-        "После города — «Товары», «Цена» и «Включить» на главной."
+        "Область ниже или ввод названия."
     )
 
 
 def city_typed_prompt_text() -> str:
     return (
-        "<b>Город (Kufar)</b>\n"
-        "Введите название города, например "
-        "<code>Барановичи</code> или <code>Бобруйск</code>."
+        "<b>Город</b>\n"
+        "Введите название, например <code>Барановичи</code>."
     )
 
 
@@ -589,7 +587,7 @@ def city_keyboard(user: dict | None) -> InlineKeyboardMarkup:
     rows.append(
         [
             InlineKeyboardButton(
-                text="⌨️ Ввести город",
+                text="Ввести город",
                 callback_data="nav:city:typed",
             )
         ]
@@ -606,26 +604,20 @@ def price_screen_text(user: dict | None) -> str:
         else "не задана"
     )
     country = normalize_country((user or {}).get("country"))
-    hint = ""
+    hint = "Объявления не дороже этой суммы."
     if country == COUNTRY_RU:
-        hint = (
-            "\n\nБ/у смартфоны чаще всего 10–50 тыс. ₽ — "
-            "выберите лимит кнопкой ниже."
-        )
-    extra = ""
+        hint = "Лимит в ₽. Обычно 10–50 тыс. для б/у."
     if user and user.get("role") == "vip":
-        extra = "\n\nСвоя сумма — кнопка ниже."
+        hint += " Своя сумма — кнопка ниже."
     return (
         "<b>Цена</b>\n"
         f"Сейчас: {cur_txt}\n"
-        "Показывать объявления не дороже этой суммы."
         f"{hint}"
-        f"{extra}"
     )
 
 
 def promo_prompt_text() -> str:
-    return "🎟 <b>Промокод</b>\n\nОтправьте код одним сообщением."
+    return "<b>Промокод</b>\nОтправьте код одним сообщением."
 
 
 def promo_back_keyboard() -> InlineKeyboardMarkup:
@@ -641,7 +633,7 @@ def custom_price_prompt_text(user: dict | None = None) -> str:
     sign = "₽" if country == COUNTRY_RU else "Br"
     example = "25000" if country == COUNTRY_RU else "1200"
     return (
-        "🎯 <b>Своя цена</b> (VIP)\n\n"
-        f"Введите максимум в {sign} — одним числом.\n"
+        "<b>Своя цена</b>\n"
+        f"Максимум в {sign}, одним числом.\n"
         f"Например: <code>{example}</code>"
     )
