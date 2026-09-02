@@ -26,7 +26,7 @@ marketplace/
   protocol.py        # MarketplaceAdapter Protocol
   kufar.py           # Адаптер Kufar (normalize + fetch_for_key)
   avito.py           # Stub Avito (fetch gated by AVITO_ENABLED)
-  registry.py        # get_adapter / adapter_for_user
+  registry.py        # get_adapter
   keys.py            # FetchKey (source + категория + geo + модели + память)
 
 avito_geo.py         # Поиск городов России (geo/avito_geo.json)
@@ -46,7 +46,7 @@ handlers/
 ## Поток рассылки
 
 1. `poller` разделяет due-списки: **Kufar** (`user_is_kufar_pollable`) и **Avito** (`user_is_avito_pollable`, только при `AVITO_ENABLED=true`). Для каждого источника — отдельный `_dispatch_due` с `source=kufar|avito`, без смешивания HTTP-батчей.
-2. При `KUFAR_USE_CATALOG` группирует Kufar-пользователей по ключу `source + категория + rgn + ar + модели + память` (память только у смартфонов) и качает маркетплейс **один раз на ключ** через `get_adapter(source).fetch_for_key` (общий TTL `FEED_REFRESH_SECONDS`). Текстовый `query` не используем: на Kufar это полнотекст, а не фильтр модели.
+2. Группирует пользователей по ключу `source + категория + rgn + ar + модели + память` (память только у смартфонов) и качает маркетплейс **один раз на ключ** через `get_adapter(source).fetch_for_key` (общий TTL `FEED_REFRESH_SECONDS`). Текстовый `query` не используем: на Kufar это полнотекст, а не фильтр модели.
 3. Для каждого due — `match_ads_for_user` по батчу его ключа. При catalog: без `smart_filtering` (кроме VIP «идеальные»), магазины (`company_ad`) и тонкий антихлам в заголовке; модель (и память у смартфонов) ещё раз проверяются локально.
 4. Новые объявления отправляются в Telegram (`formatter.format_ad`).
 
@@ -129,7 +129,7 @@ Callback URL в панели RollyPay: `{PUBLIC_BASE_URL}/webhooks/rollypay` (и
 
 ## Скорость
 
-- При `KUFAR_USE_CATALOG` — один fetch на уникальный ключ (категория+город+модели+память), не на пользователя; до `KUFAR_MAX_PAGES` страниц на запрос (cursor).
+- При catalog — один fetch на уникальный ключ (категория+город+модели+память), не на пользователя; до `KUFAR_MAX_PAGES` страниц на запрос (cursor).
 - VIP опрашивается отдельно (~30 с), обычные — реже (~7 мин); тик poller не длиннее VIP и не ждёт fetch обычных.
 - Кэш `market_prices` в памяти на один проход poller; в БД — только цены за `PRICE_DATA_RETENTION_DAYS` (по умолчанию 14), старые строки prune при старте и в poller.
 - Минимум лишних запросов к БД в хендлерах (один `get_user` после обновления username).

@@ -48,6 +48,19 @@ class FormatAdTests(unittest.TestCase):
         self.assertIn("Средняя", text)
         self.assertIn("4 200 Br", text)
 
+    def test_zero_price_is_negotiable(self) -> None:
+        ad = self._sample_ad()
+        ad["price"] = 0
+        text = format_ad(ad, compact=True, country="by")
+        self.assertIn("договорная", text)
+        self.assertNotIn("≈ 1$", text)
+
+    def test_missing_price_is_negotiable(self) -> None:
+        ad = self._sample_ad()
+        ad["price"] = None
+        text = format_ad(ad, compact=True, country="by")
+        self.assertIn("договорная", text)
+
 
 if __name__ == "__main__":
     unittest.main()

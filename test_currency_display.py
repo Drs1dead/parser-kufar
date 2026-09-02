@@ -3,7 +3,11 @@ import math
 import unittest
 from unittest.mock import patch
 
-from currency_display import format_triple_price
+from currency_display import (
+    format_triple_price,
+    format_vip_checkout_price,
+    format_vip_plan_price,
+)
 from marketplace.types import COUNTRY_BY, COUNTRY_RU
 
 
@@ -32,16 +36,35 @@ class CurrencyDisplayTests(unittest.TestCase):
         self.assertIn("≈ 1600$", text)
 
     def test_converts_ceil_not_round_half(self) -> None:
-        # 10 * 28.5 = 285 exact; use fractional rate so ceil differs from floor
         with patch("currency_display.BYN_TO_RUB", 28.1):
             text = format_triple_price(10, country=COUNTRY_BY, price_usd_hint=3)
-        # 10 * 28.1 = 281.0 exact
         self.assertIn("≈ 281 ₽", text)
         with patch("currency_display.BYN_TO_RUB", 28.01):
             text = format_triple_price(10, country=COUNTRY_BY, price_usd_hint=3)
-        # 280.1 -> ceil 281
         self.assertIn("≈ 281 ₽", text)
         self.assertEqual(math.ceil(10 * 28.01), 281)
+
+    def test_zero_is_negotiable(self) -> None:
+        self.assertEqual(format_triple_price(0, country=COUNTRY_BY), "договорная")
+        self.assertEqual(format_triple_price(-1, country=COUNTRY_RU), "договорная")
+
+    def test_vip_plan_by_leads_with_byn(self) -> None:
+        text = format_vip_plan_price(3, country=COUNTRY_BY)
+        self.assertTrue(text.startswith("≈ "))
+        self.assertIn("Br", text.split("·")[0])
+        self.assertIn("$3", text)
+        self.assertIn("₽", text)
+
+    def test_vip_plan_ru_leads_with_rub(self) -> None:
+        text = format_vip_plan_price(3, country=COUNTRY_RU)
+        self.assertIn("₽", text.split("·")[0])
+        self.assertIn("$3", text)
+
+    def test_vip_checkout_by(self) -> None:
+        text = format_vip_checkout_price(3, "271.50", country=COUNTRY_BY)
+        self.assertIn("Br", text.split("·")[0])
+        self.assertIn("$3", text)
+        self.assertIn("271.5 ₽", text)
 
 
 if __name__ == "__main__":

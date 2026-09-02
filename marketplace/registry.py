@@ -18,7 +18,3 @@ def get_adapter(source: str) -> MarketplaceAdapter:
     if adapter is None:
         raise ValueError(f"unknown marketplace source: {source!r}")
     return adapter
-
-
-def adapter_for_user(user: dict | None) -> MarketplaceAdapter:
-    return get_adapter(normalize_primary_source((user or {}).get("primary_source")))

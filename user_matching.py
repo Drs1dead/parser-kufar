@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from config import FILTER_DEBUG_LOG, KUFAR_USE_CATALOG, MARKET_DISCOUNT_THRESHOLD
+from config import FILTER_DEBUG_LOG, MARKET_DISCOUNT_THRESHOLD
 from db import avg_market_price
 from marketplace.keys import user_primary_source
 from marketplace.types import SOURCE_AVITO
@@ -28,8 +28,9 @@ def _is_avito_user(user: dict) -> bool:
 
 
 def _catalog_style_filters(user: dict) -> bool:
-    """Catalog-style local filter: Kufar catalog mode or Avito (no company_ad API)."""
-    return KUFAR_USE_CATALOG or _is_avito_user(user)
+    """Catalog-style local filter (Kufar catalog + Avito)."""
+    del user
+    return True
 
 
 def _smart_filtering_for(user: dict) -> bool:

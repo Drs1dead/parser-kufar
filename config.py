@@ -355,40 +355,21 @@ NOT_SALE_TERMS: tuple[str, ...] = (
     "работаем без скидок",
 )
 
-KUFAR_QUERY = os.getenv(
-    "KUFAR_QUERY",
-    "iphone,samsung galaxy s,samsung galaxy z flip,samsung galaxy z fold",
-)
-KUFAR_QUERIES: tuple[str, ...] = tuple(
-    q.strip()
-    for q in KUFAR_QUERY.split(",")
-    if q.strip()
-) or ("iphone", "samsung galaxy s", "samsung galaxy z flip", "samsung galaxy z fold")
-KUFAR_REGION = int(os.getenv("KUFAR_REGION", "7"))
 KUFAR_SIZE = int(os.getenv("KUFAR_SIZE", "40"))
-# Каталожный search-api (phm/ppm/ot) вместо широких текстовых KUFAR_QUERIES.
-_kufar_catalog = os.getenv("KUFAR_USE_CATALOG", "true").strip().lower()
-KUFAR_USE_CATALOG = _kufar_catalog not in ("0", "false", "no", "off")
-KUFAR_CATALOG_COMPARE = os.getenv("KUFAR_CATALOG_COMPARE", "").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-)
 
-# Общий TTL кэша fetch: Kufar по FetchKey, снимок Avito JSON feed. >= VIP interval.
+# Общий TTL кэша fetch: Kufar по FetchKey, снимок Avito JSON feed.
 _feed_refresh_env = os.getenv("FEED_REFRESH_SECONDS")
 if _feed_refresh_env:
     FEED_REFRESH_SECONDS = max(1, int(_feed_refresh_env))
 else:
     _legacy_fetch_ttl = os.getenv("FETCH_CACHE_TTL_SECONDS")
+    _default_refresh = max(VIP_CHECK_INTERVAL, 60)
     FEED_REFRESH_SECONDS = max(
-        1, int(_legacy_fetch_ttl or str(VIP_CHECK_INTERVAL))
+        _default_refresh,
+        int(_legacy_fetch_ttl) if _legacy_fetch_ttl else _default_refresh,
     )
 MAX_AD_PHOTOS = max(1, int(os.getenv("MAX_AD_PHOTOS", "3")))
 AD_DESCRIPTION_MAX_CHARS = max(50, int(os.getenv("AD_DESCRIPTION_MAX_CHARS", "350")))
-AD_DESCRIPTION_MAX_CHARS_REGULAR = max(
-    50, int(os.getenv("AD_DESCRIPTION_MAX_CHARS_REGULAR", "150"))
-)
 
 # Курсы для тройного отображения цен (настраиваются в .env).
 BYN_TO_RUB = float(os.getenv("BYN_TO_RUB", "28.5"))

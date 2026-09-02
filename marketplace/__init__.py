@@ -5,7 +5,7 @@ from marketplace.keys import (
     user_is_avito_pollable,
     user_is_kufar_pollable,
 )
-from marketplace.registry import adapter_for_user, get_adapter
+from marketplace.registry import get_adapter
 from marketplace.types import (
     COUNTRY_BY,
     COUNTRY_LABELS,
@@ -25,7 +25,6 @@ __all__ = [
     "NormalizedAd",
     "SOURCE_AVITO",
     "SOURCE_KUFAR",
-    "adapter_for_user",
     "fetch_key_for_user",
     "get_adapter",
     "group_users_by_fetch_key",

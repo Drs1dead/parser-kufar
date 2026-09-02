@@ -57,7 +57,7 @@ class PollerIntervalTests(unittest.TestCase):
         delay = _poll_sleep_seconds(
             users, 1_000.0 + VIP_CHECK_INTERVAL + 10, tick=10
         )
-        self.assertEqual(delay, 0.05)
+        self.assertEqual(delay, 1.0)
 
 
 class PollerFetchCacheTests(unittest.IsolatedAsyncioTestCase):
@@ -75,10 +75,10 @@ class PollerFetchCacheTests(unittest.IsolatedAsyncioTestCase):
             async with aiohttp.ClientSession(
                 headers=DEFAULT_HEADERS, connector=connector
             ) as session:
-                _, merged1 = await _fetch_catalog_groups(groups, session=session)
-                _, merged2 = await _fetch_catalog_groups(groups, session=session)
-            self.assertEqual(len(merged1), 1)
-            self.assertEqual(len(merged2), 1)
+                ads1 = await _fetch_catalog_groups(groups, session=session)
+                ads2 = await _fetch_catalog_groups(groups, session=session)
+            self.assertEqual(len(ads1[key]), 1)
+            self.assertEqual(len(ads2[key]), 1)
             self.assertEqual(mock_adapter.fetch_for_key.await_count, 1)
 
         cached = _fetch_cache.get(key)
@@ -100,3 +100,16 @@ class DescriptionCacheTests(unittest.IsolatedAsyncioTestCase):
             await enrich_ads_descriptions([ad2])
             self.assertEqual(ad2["description"], "cached body")
             mock_fetch.assert_awaited_once()
+
+    async def test_empty_description_not_cached(self) -> None:
+        link = "https://www.kufar.by/item/empty-desc"
+        _description_cache.clear()
+        ad = {"link": link, "description": ""}
+        with patch(
+            "kufar_fetch._fetch_description", new_callable=AsyncMock
+        ) as mock_fetch:
+            mock_fetch.return_value = ""
+            await enrich_ads_descriptions([ad])
+            self.assertNotIn(link, _description_cache)
+            await enrich_ads_descriptions([{"link": link, "description": ""}])
+            self.assertEqual(mock_fetch.await_count, 2)

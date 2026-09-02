@@ -79,14 +79,14 @@ def format_ad(
 
     price = ad.get("price")
     price_usd = ad.get("price_usd")
-    if price is not None and isinstance(price, int):
+    if isinstance(price, int) and price > 0:
         price_str = format_triple_price(
             price,
             country=user_country,
-            price_usd_hint=price_usd if isinstance(price_usd, int) else None,
+            price_usd_hint=price_usd if isinstance(price_usd, int) and price_usd > 0 else None,
         )
     else:
-        price_str = "не указана"
+        price_str = "договорная"
 
     location = _esc(ad.get("location") or "")
     summary = _esc((ad.get("summary") or "").strip())
@@ -108,7 +108,7 @@ def format_ad(
         parts.append("")
     parts.append(f"<b>{title}</b>")
     parts.append(f"<b>{_esc(price_str)}</b>")
-    if market_avg_price is not None:
+    if market_avg_price is not None and market_avg_price > 0:
         avg_str = format_triple_price(market_avg_price, country=user_country)
         parts.append(f"Средняя · {_esc(avg_str)}")
     if summary:

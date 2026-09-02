@@ -121,7 +121,7 @@ async def on_vip_buy(cb: CallbackQuery) -> None:
         return
     await flush_screen(
         cb,
-        vip_pay_text(row),
+        vip_pay_text(row, user),
         reply_markup=vip_pay_keyboard(row),
         notice="Счёт создан",
     )
@@ -685,7 +685,7 @@ async def on_nav_callback(cb: CallbackQuery, state: FSMContext) -> None:
             await flush_screen(
                 cb,
                 vip_plans_text(user),
-                reply_markup=vip_plans_keyboard(),
+                reply_markup=vip_plans_keyboard(user),
             )
             return
 

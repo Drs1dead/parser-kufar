@@ -22,7 +22,6 @@ from config import (
     CHECK_INTERVAL,
     FEED_REFRESH_SECONDS,
     FIRST_RUN_LIMIT,
-    KUFAR_USE_CATALOG,
     MARKET_DISCOUNT_THRESHOLD,
     MAX_AD_PHOTOS,
     REGULAR_CHECK_INTERVAL,
@@ -60,7 +59,6 @@ from marketplace.types import SOURCE_AVITO, SOURCE_KUFAR, normalize_country, nor
 from kufar_fetch import (
     DEFAULT_HEADERS,
     enrich_ads_descriptions,
-    fetch_ads,
 )
 from product_catalog import is_phones_category
 from user_matching import VIP_SPECIAL_MAX_PRICE, match_ads_for_user
@@ -69,10 +67,22 @@ log = logging.getLogger("kufar_bot.poller")
 
 first_run_notified: set[int] = set()
 _fetch_cache: dict[FetchKey, tuple[float, list[dict]]] = {}
+FETCH_KEY_CONCURRENCY = 3
+POLL_DUE_SLEEP_FLOOR = 1.0
+
+
+def _evict_stale_fetch_cache(now: float) -> None:
+    stale = [
+        key
+        for key, (ts, _) in _fetch_cache.items()
+        if now - ts >= FEED_REFRESH_SECONDS
+    ]
+    for key in stale:
+        _fetch_cache.pop(key, None)
 
 VIP_EXPIRED_MSG = (
     "⭐ <b>VIP закончился</b>\n\n"
-    "Память сброшена на <b>64 GB</b>. "
+    "Память сброшена на <b>64 ГБ</b>. "
     "Модели и лимит цены сохранены — при необходимости продлите VIP в меню."
 )
 FIRST_RUN_DIGEST_MSG_KUFAR = (
@@ -181,7 +191,7 @@ def _poll_sleep_seconds(
         _seconds_until_due(user, now, _poll_source(user)) for user in users
     )
     if soonest <= 0:
-        return 0.05
+        return min(cap, POLL_DUE_SLEEP_FLOOR)
     return min(cap, soonest)
 
 
@@ -313,13 +323,17 @@ async def _process_user(
     user: dict,
     ads: list[dict],
     market_cache: dict[str, int | None],
+    *,
+    matched: list[dict] | None = None,
+    session: aiohttp.ClientSession | None = None,
 ) -> None:
     chat_id = user["chat_id"]
     is_vip = user.get("role") == "vip"
     feed_mode = (user.get("vip_feed_mode") or "normal") if is_vip else "normal"
     source = user_primary_source(user)
 
-    matched = match_ads_for_user(user, ads, market_cache)
+    if matched is None:
+        matched = match_ads_for_user(user, ads, market_cache)
     if not matched:
         return
 
@@ -353,6 +367,18 @@ async def _process_user(
         to_send = strict_ok
         if not to_send:
             return
+
+    # Safety-net: VIP Kufar без описания — догрузить перед отправкой.
+    if is_vip and source == SOURCE_KUFAR and session is not None:
+        need_desc = [
+            ad
+            for ad in to_send
+            if ad.get("link")
+            and ad["link"] not in already_seen
+            and not (ad.get("description") or "").strip()
+        ]
+        if need_desc:
+            await enrich_ads_descriptions(need_desc, session=session, concurrency=3)
 
     for ad in to_send:
         link = ad.get("link")
@@ -427,8 +453,9 @@ async def _batch_enrich_vip_descriptions(
     market_cache: dict[str, int | None],
     *,
     session: aiohttp.ClientSession,
-) -> None:
-    """Один HTTP-проход на link для VIP: описание в карточке рассылки."""
+) -> dict[int, list[dict]]:
+    """Один HTTP-проход на link для VIP; возвращает matched по chat_id."""
+    matched_by_chat: dict[int, list[dict]] = {}
     by_link: dict[str, dict] = {}
     for key, group_users in groups.items():
         if key[0] == SOURCE_AVITO:
@@ -440,9 +467,10 @@ async def _batch_enrich_vip_descriptions(
             if user.get("role") != "vip":
                 continue
             matched = match_ads_for_user(user, ads, market_cache)
+            chat_id = int(user["chat_id"])
+            matched_by_chat[chat_id] = matched
             if not matched:
                 continue
-            chat_id = user["chat_id"]
             source = user_primary_source(user)
             links = [ad["link"] for ad in matched if ad.get("link")]
             already_seen = seen_links_for(chat_id, links, source=source)
@@ -455,17 +483,19 @@ async def _batch_enrich_vip_descriptions(
                 by_link.setdefault(link, ad)
     if by_link:
         await enrich_ads_descriptions(list(by_link.values()), session=session)
+    return matched_by_chat
 
 
 async def _fetch_catalog_groups(
     groups: dict[FetchKey, list[dict]],
     *,
     session: aiohttp.ClientSession,
-) -> tuple[dict[FetchKey, list[dict]], list[dict]]:
+) -> dict[FetchKey, list[dict]]:
     keys = list(groups.keys())
     if not keys:
-        return {}, []
+        return {}
     now = time.time()
+    _evict_stale_fetch_cache(now)
     ads_by_key: dict[FetchKey, list[dict]] = {}
     keys_to_fetch: list[FetchKey] = []
     for key in keys:
@@ -476,26 +506,19 @@ async def _fetch_catalog_groups(
             keys_to_fetch.append(key)
 
     if keys_to_fetch:
-        batches = await asyncio.gather(
-            *(
-                get_adapter(key[0]).fetch_for_key(key, session=session)
-                for key in keys_to_fetch
-            )
-        )
-        for key, ads in zip(keys_to_fetch, batches):
+        sem = asyncio.Semaphore(FETCH_KEY_CONCURRENCY)
+
+        async def _one(key: FetchKey) -> tuple[FetchKey, list[dict]]:
+            async with sem:
+                ads = await get_adapter(key[0]).fetch_for_key(key, session=session)
+            return key, ads
+
+        batches = await asyncio.gather(*(_one(key) for key in keys_to_fetch))
+        for key, ads in batches:
             _fetch_cache[key] = (now, ads)
             ads_by_key[key] = ads
 
-    merged: list[dict] = []
-    seen_links: set[str] = set()
-    for key in keys:
-        for ad in ads_by_key.get(key) or []:
-            link = ad.get("link")
-            if not isinstance(link, str) or not link or link in seen_links:
-                continue
-            seen_links.add(link)
-            merged.append(ad)
-    return ads_by_key, merged
+    return ads_by_key
 
 
 async def _dispatch_due(
@@ -507,53 +530,52 @@ async def _dispatch_due(
     if not due:
         return
     src = normalize_primary_source(source)
-    use_catalog = KUFAR_USE_CATALOG if src == SOURCE_KUFAR else True
-    if use_catalog:
-        groups = group_users_by_fetch_key(due)
-        connector = aiohttp.TCPConnector(limit=8)
-        async with aiohttp.ClientSession(
-            headers=DEFAULT_HEADERS, connector=connector
-        ) as session:
-            ads_by_key, merged = await _fetch_catalog_groups(groups, session=session)
-            await asyncio.to_thread(_ingest_market_prices_from_ads, merged)
-            market_cache: dict[str, int | None] = {}
-            await _batch_enrich_vip_descriptions(
-                due, groups, ads_by_key, market_cache, session=session
-            )
-            log.info(
-                "poll %s catalog ads=%d keys=%d due=%d",
-                src,
-                len(merged),
-                len(groups),
-                len(due),
-            )
-            for key, group_users in groups.items():
-                ads = ads_by_key.get(key) or []
-                for user in group_users:
-                    try:
-                        await _process_user(bot, user, ads, market_cache)
-                        _mark_user_polled(user)
-                    except Exception:
-                        log_exception(
-                            log, "poll user failed chat_id=%s", user["chat_id"]
-                        )
-        return
-
-    if src != SOURCE_KUFAR:
-        log.debug("poll %s skip — non-catalog path not supported", src)
-        return
-
-    ads = await fetch_ads()
-    await asyncio.to_thread(_ingest_market_prices_from_ads, ads)
-    market_cache = {}
-    log.info("poll fetched ads=%d due=%d", len(ads), len(due))
-    for user in due:
-        try:
-            await _process_user(bot, user, ads, market_cache)
-            _mark_user_polled(user)
-        except Exception:
-            log_exception(log, "poll user failed chat_id=%s", user["chat_id"])
-
+    groups = group_users_by_fetch_key(due)
+    connector = aiohttp.TCPConnector(limit=8)
+    async with aiohttp.ClientSession(
+        headers=DEFAULT_HEADERS, connector=connector
+    ) as session:
+        ads_by_key = await _fetch_catalog_groups(groups, session=session)
+        ingest_ads: list[dict] = []
+        seen_links: set[str] = set()
+        for key in groups:
+            for ad in ads_by_key.get(key) or []:
+                link = ad.get("link")
+                if not isinstance(link, str) or not link or link in seen_links:
+                    continue
+                seen_links.add(link)
+                ingest_ads.append(ad)
+        await asyncio.to_thread(_ingest_market_prices_from_ads, ingest_ads)
+        market_cache: dict[str, int | None] = {}
+        matched_by_chat = await _batch_enrich_vip_descriptions(
+            due, groups, ads_by_key, market_cache, session=session
+        )
+        log.info(
+            "poll %s catalog ads=%d keys=%d due=%d",
+            src,
+            len(ingest_ads),
+            len(groups),
+            len(due),
+        )
+        for key, group_users in groups.items():
+            ads = ads_by_key.get(key) or []
+            for user in group_users:
+                try:
+                    chat_id = int(user["chat_id"])
+                    prematched = matched_by_chat.get(chat_id)
+                    await _process_user(
+                        bot,
+                        user,
+                        ads,
+                        market_cache,
+                        matched=prematched if user.get("role") == "vip" else None,
+                        session=session,
+                    )
+                    _mark_user_polled(user)
+                except Exception:
+                    log_exception(
+                        log, "poll user failed chat_id=%s", user["chat_id"]
+                    )
 
 async def poller(bot: Bot) -> None:
     # Тяжёлые операции (expire/prune) не обязательно делать каждый цикл.

@@ -17,6 +17,10 @@ from config import (
     format_price_for_country,
     format_price_for_user,
 )
+from currency_display import (
+    format_vip_checkout_price,
+    format_vip_plan_price,
+)
 from db import count_referrals, ensure_referral_code
 from kufar_catalog import QUICK_RGN_BUTTONS, user_city_label
 from marketplace.types import (
@@ -269,7 +273,19 @@ def vip_text(user: dict | None) -> str:
             "⚡ потоки: ниже рынка, обмен, идеальные",
         ]
         if not ROLLYPAY_ENABLED:
-            lines += ["", f"Цена: <b>{VIP_PRICE_USD}$</b> / 30 дн. · @manohio"]
+            lines += [
+                "",
+                f"Цена: <b>{format_vip_plan_price(VIP_PRICE_USD, country=normalize_country((user or {}).get('country')))}</b> / 30 дн. · @manohio",
+            ]
+        else:
+            month = VIP_PLANS["month"]
+            week = VIP_PLANS["week"]
+            country = normalize_country((user or {}).get("country"))
+            lines += [
+                "",
+                f"От <b>{format_vip_plan_price(week['usd'], country=country, short=True)}</b> · "
+                f"30 дн. <b>{format_vip_plan_price(month['usd'], country=country, short=True)}</b>",
+            ]
 
     if user and user.get("chat_id") is not None:
         cid = int(user["chat_id"])
@@ -316,36 +332,47 @@ def vip_plans_text(user: dict | None = None) -> str:
     quarter = VIP_PLANS["quarter"]
     is_vip = bool(user and user.get("role") == "vip")
     action = "Продление" if is_vip else "Покупка"
+    country = normalize_country((user or {}).get("country"))
     return (
         f"⭐ <b>Тариф VIP</b>\n"
         f"{action} — выберите срок. Оплата онлайн, VIP включится сам.\n\n"
-        f"• {int(week['days'])} дней — <b>${int(week['usd'])}</b>\n"
-        f"• {int(month['days'])} дней — <b>${int(month['usd'])}</b> 🔥 чаще берут\n"
-        f"• {int(quarter['days'])} дней — <b>${int(quarter['usd'])}</b> 💎 выгодно"
+        f"• {int(week['days'])} дней — <b>{format_vip_plan_price(week['usd'], country=country)}</b>\n"
+        f"• {int(month['days'])} дней — <b>{format_vip_plan_price(month['usd'], country=country)}</b> 🔥 чаще берут\n"
+        f"• {int(quarter['days'])} дней — <b>{format_vip_plan_price(quarter['usd'], country=country)}</b> 💎 выгодно"
     )
 
 
-def vip_plans_keyboard() -> InlineKeyboardMarkup:
+def vip_plans_keyboard(user: dict | None = None) -> InlineKeyboardMarkup:
     week = VIP_PLANS["week"]
     month = VIP_PLANS["month"]
     quarter = VIP_PLANS["quarter"]
+    country = normalize_country((user or {}).get("country"))
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"{int(week['days'])} дней — ${int(week['usd'])}",
+                    text=(
+                        f"{int(week['days'])} дн — "
+                        f"{format_vip_plan_price(week['usd'], country=country, short=True)}"
+                    ),
                     callback_data="vip:buy:week",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text=f"{int(month['days'])} дней — ${int(month['usd'])} 🔥",
+                    text=(
+                        f"{int(month['days'])} дн — "
+                        f"{format_vip_plan_price(month['usd'], country=country, short=True)} 🔥"
+                    ),
                     callback_data="vip:buy:month",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text=f"{int(quarter['days'])} дней — ${int(quarter['usd'])} 💎",
+                    text=(
+                        f"{int(quarter['days'])} дн — "
+                        f"{format_vip_plan_price(quarter['usd'], country=country, short=True)} 💎"
+                    ),
                     callback_data="vip:buy:quarter",
                 )
             ],
@@ -354,18 +381,21 @@ def vip_plans_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def vip_pay_text(row: dict) -> str:
+def vip_pay_text(row: dict, user: dict | None = None) -> str:
     days = int(row.get("days") or 0)
-    rub = str(row.get("amount_rub") or "")
-    usd = row.get("amount_usd")
-    usd_part = f" (~${usd:g})" if usd is not None else ""
+    country = normalize_country((user or {}).get("country"))
+    amount = format_vip_checkout_price(
+        row.get("amount_usd"),
+        row.get("amount_rub"),
+        country=country,
+    )
     return (
         "💳 <b>Оплата VIP</b>\n"
         f"Срок: <b>{days}</b> дн.\n"
-        f"Сумма: <b>{rub} ₽</b>{usd_part}\n\n"
+        f"Сумма: <b>{amount}</b>\n\n"
         "1. Нажмите «Оплатить»\n"
         "2. Завершите платёж\n"
-        "3. VIP включится сам после 100%"
+        "3. VIP включится автоматически"
     )
 
 

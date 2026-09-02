@@ -13,8 +13,6 @@ from config import (
     KUFAR_FETCH_RETRIES,
     KUFAR_FETCH_RETRY_DELAY,
     KUFAR_MAX_PAGES,
-    KUFAR_QUERIES,
-    KUFAR_REGION,
     KUFAR_SIZE,
 )
 from filters import parse_memory_gb_text
@@ -39,7 +37,32 @@ NEXT_DATA_RE = re.compile(
     re.DOTALL,
 )
 DESCRIPTION_CACHE_TTL_SECONDS = 3600
+DESCRIPTION_CACHE_MAX = 500
 _description_cache: dict[str, tuple[float, str]] = {}
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+
+
+def _plain_description(raw: str) -> str:
+    text = _HTML_TAG_RE.sub(" ", raw or "")
+    text = _WS_RE.sub(" ", text).strip()
+    if len(text) > 500:
+        text = text[:500].rstrip() + "..."
+    return text
+
+
+def _cache_description(link: str, body: str) -> None:
+    """Кэширует только непустое описание; ограничивает размер словаря."""
+    body = (body or "").strip()
+    if not link or not body:
+        return
+    _description_cache[link] = (time.time(), body)
+    if len(_description_cache) <= DESCRIPTION_CACHE_MAX:
+        return
+    # Удаляем самые старые записи.
+    oldest = sorted(_description_cache.items(), key=lambda kv: kv[1][0])
+    for key, _ in oldest[: max(1, len(_description_cache) - DESCRIPTION_CACHE_MAX)]:
+        _description_cache.pop(key, None)
 
 
 def _param(params: list[dict], name: str) -> Optional[dict]:
@@ -126,6 +149,10 @@ def normalize_listing(raw: dict) -> Optional[dict]:
     summary = _build_summary(ad_params)
     condition_label = _param_label(ad_params, "condition").strip()
     memory_gb = parse_memory_gb_text(phone_memory) or parse_memory_gb_text(summary)
+    raw_body = raw.get("body") or raw.get("body_short") or ""
+    if not isinstance(raw_body, str):
+        raw_body = str(raw_body) if raw_body else ""
+    description = _plain_description(raw_body)
     return {
         "ad_id": ad_id,
         "title": subject,
@@ -138,7 +165,7 @@ def normalize_listing(raw: dict) -> Optional[dict]:
         "phone_memory": phone_memory,
         "memory_gb": memory_gb,
         "company_ad": bool(raw.get("company_ad")),
-        "description": "",
+        "description": description,
         "link": link.split("?")[0],
         "list_time": raw.get("list_time"),
         "photo_urls": _photo_urls(raw),
@@ -225,17 +252,6 @@ async def _fetch_search_page(
     return [], None
 
 
-def _text_search_params(query: str) -> dict[str, str]:
-    return {
-        "lang": "ru",
-        "size": str(KUFAR_SIZE),
-        "sort": "lst.d",
-        "rgn": str(KUFAR_REGION),
-        "cur": "BYR",
-        "query": query,
-    }
-
-
 async def _fetch_search_params(
     session: aiohttp.ClientSession, params: dict[str, str]
 ) -> list[dict]:
@@ -263,27 +279,25 @@ async def _fetch_search_params(
     return all_raw
 
 
-async def _fetch_search(session: aiohttp.ClientSession, query: str) -> list[dict]:
-    """До KUFAR_MAX_PAGES страниц листинга по одному поисковому запросу."""
-    return await _fetch_search_params(session, _text_search_params(query))
-
-
 async def _fetch_description(session: aiohttp.ClientSession, link: str) -> str:
     try:
         async with session.get(link, timeout=aiohttp.ClientTimeout(total=15)) as r:
             if r.status != 200:
+                log.warning("kufar desc status=%s link=%s", r.status, link)
                 return ""
             html = await r.text()
     except Exception as e:
-        log.debug("[KUFAR] не удалось открыть %s: %s", link, e)
+        log.warning("kufar desc fetch failed link=%s: %s", link, e)
         return ""
 
     m = NEXT_DATA_RE.search(html)
     if not m:
+        log.warning("kufar desc no __NEXT_DATA__ link=%s html_len=%s", link, len(html))
         return ""
     try:
         data = json.loads(m.group(1))
     except json.JSONDecodeError:
+        log.warning("kufar desc bad __NEXT_DATA__ json link=%s", link)
         return ""
 
     ad_view = (
@@ -291,10 +305,15 @@ async def _fetch_description(session: aiohttp.ClientSession, link: str) -> str:
         .get("initialState", {})
         .get("adView", {})
         .get("data", {})
-    )
-    body = (ad_view.get("body") or "").strip()
-    if len(body) > 500:
-        body = body[:500].rstrip() + "..."
+    ) or {}
+    if not isinstance(ad_view, dict):
+        ad_view = {}
+    raw_body = ad_view.get("body") or ad_view.get("description") or ""
+    if not isinstance(raw_body, str):
+        raw_body = str(raw_body) if raw_body else ""
+    body = _plain_description(raw_body)
+    if not body:
+        log.warning("kufar desc empty body link=%s", link)
     return body
 
 
@@ -304,8 +323,9 @@ async def _enrich_description(
     async with sem:
         link = ad["link"]
         body = await _fetch_description(session, link)
-        _description_cache[link] = (time.time(), body)
-        ad["description"] = body
+        if body:
+            _cache_description(link, body)
+            ad["description"] = body
 
 
 def _apply_cached_description(ad: dict) -> bool:
@@ -315,9 +335,14 @@ def _apply_cached_description(ad: dict) -> bool:
     cached = _description_cache.get(link)
     if not cached:
         return False
-    if time.time() - cached[0] >= DESCRIPTION_CACHE_TTL_SECONDS:
+    ts, body = cached
+    if time.time() - ts >= DESCRIPTION_CACHE_TTL_SECONDS:
+        _description_cache.pop(link, None)
         return False
-    ad["description"] = cached[1]
+    if not (body or "").strip():
+        _description_cache.pop(link, None)
+        return False
+    ad["description"] = body
     return True
 
 
@@ -364,31 +389,6 @@ async def enrich_ads_descriptions(
         headers=DEFAULT_HEADERS, connector=connector
     ) as own:
         await _run(own)
-
-
-async def fetch_ads() -> list[dict]:
-    """
-    Объявления с листинга. Поля: ad_id, title, price, price_usd, location,
-    summary, description, link, list_time, photo_urls.
-    """
-    raw_ads: list[dict] = []
-    connector = aiohttp.TCPConnector(limit=8)
-    async with aiohttp.ClientSession(
-        headers=DEFAULT_HEADERS, connector=connector
-    ) as session:
-        batches = await asyncio.gather(
-            *(_fetch_search(session, query) for query in KUFAR_QUERIES)
-        )
-        for batch in batches:
-            raw_ads.extend(batch)
-    ads = _normalize_raw_ads(raw_ads)
-    log.debug(
-        "kufar listings raw=%d normalized=%d pages_per_query=%s",
-        len(raw_ads),
-        len(ads),
-        KUFAR_MAX_PAGES,
-    )
-    return ads
 
 
 def _catalog_request_params(facets: dict[str, str]) -> dict[str, str]:
