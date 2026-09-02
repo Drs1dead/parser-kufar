@@ -355,6 +355,3 @@ def _watch_search_params(
             ar,
         )
     ]
-
-
-from marketplace.keys import FetchKey, fetch_key_for_user, group_users_by_fetch_key

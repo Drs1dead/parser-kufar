@@ -14,11 +14,10 @@ from kufar_catalog import (
     KUFAR_PRIVATE_OT,
     catalog_search_params,
     city_rgn,
-    fetch_key_for_user,
-    group_users_by_fetch_key,
     or_facet,
 )
 from kufar_fetch import normalize_listing
+from marketplace.keys import fetch_key_for_user, group_users_by_fetch_key
 
 
 class CatalogParamsTests(unittest.TestCase):
